@@ -1,7 +1,6 @@
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
-from dotenv import load_dotenv
-load_dotenv()
+
 
 class InputArg(BaseModel):
     a: int = Field(..., alias='a', description="")
