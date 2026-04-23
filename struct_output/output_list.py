@@ -16,3 +16,12 @@ class ParsedDoc(BaseModel):
     """整份文档的解析结果"""
     sections: List[DocumentSection]
     summary_needed: bool = Field(default=True)
+
+# --- BaseModel: 定义解析后的结构 ---
+class Section(BaseModel):
+    title: str = Field(description="章节标题")
+    level: int = Field(description="标题层级")
+    content: str = Field(description="该章节的正文内容")
+
+class StructuredDoc(BaseModel):
+    sections: List[Section]

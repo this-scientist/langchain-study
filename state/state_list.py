@@ -1,7 +1,7 @@
 from typing import TypedDict, List, Annotated, Optional
 import operator
 from langgraph.graph.message import add_messages
-from struct_output.output_list import ParsedDoc
+from struct_output.output_list import ParsedDoc,StructuredDoc
 
 class AgentState(TypedDict):
     # 对话历史，持续累加
@@ -23,3 +23,9 @@ class OverallState(TypedDict):
     final_summary: str
 
 
+# --- TypedDict: 定义图的状态 ---
+class DocState(TypedDict):
+    file_path: str
+    raw_text_chunks: List[str]    # 存储初步读取的文本
+    parsed_data: Optional[StructuredDoc] # 存储 Agent 整理后的结果
+    index_status: str
