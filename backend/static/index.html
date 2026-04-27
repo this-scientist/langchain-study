@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>智能测试点分析系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; color: #333; height: 100vh; display: flex; flex-direction: column; }
+        .header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+        .header h1 { font-size: 20px; font-weight: 600; }
+        .header .subtitle { font-size: 13px; color: #8899aa; margin-left: 12px; }
+        .main-container { display: flex; flex: 1; overflow: hidden; }
+        .left-panel { width: 280px; min-width: 280px; background: #fff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; }
+        .middle-panel { flex: 1; background: #fff; display: flex; flex-direction: column; overflow: hidden; }
+        .right-panel { width: 380px; min-width: 380px; background: #fafafa; border-left: 1px solid #e0e0e0; display: flex; flex-direction: column; }
+        .panel-header { padding: 12px 16px; font-size: 14px; font-weight: 600; color: #1a1a2e; border-bottom: 1px solid #e0e0e0; background: #f8f9fa; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; }
+        .panel-body { flex: 1; overflow-y: auto; padding: 8px; }
+        .upload-zone { border: 2px dashed #ccc; border-radius: 8px; padding: 24px; text-align: center; margin: 12px; cursor: pointer; transition: all 0.3s; }
+        .upload-zone:hover { border-color: #4a6cf7; background: #f0f4ff; }
+        .upload-zone.dragover { border-color: #4a6cf7; background: #e8f0fe; }
+        .upload-zone.uploading { border-color: #4a6cf7; background: #f0f4ff; cursor: default; opacity: 0.7; }
+        .upload-zone.error { border-color: #f44336; background: #fff5f5; }
+        .upload-zone .icon { font-size: 36px; color: #4a6cf7; margin-bottom: 8px; }
+        .upload-zone .icon.error-icon { color: #f44336; }
+        .upload-zone .text { font-size: 14px; color: #666; }
+        .upload-zone .hint { font-size: 12px; color: #999; margin-top: 4px; }
+        .upload-zone .error-text { font-size: 12px; color: #f44336; margin-top: 6px; }
+        .upload-zone .retry-btn { margin-top: 8px; padding: 4px 16px; background: #4a6cf7; color: #fff; border: none; border-radius: 4px; font-size: 12px; cursor: pointer; }
+        .upload-zone .retry-btn:hover { background: #3b5de7; }
+        .toc-section-group { font-size: 11px; font-weight: 600; color: #888; padding: 6px 12px 2px; letter-spacing: 0.5px; }
+        .toc-item { padding: 8px 12px; border-radius: 6px; margin-bottom: 1px; cursor: pointer; display: flex; align-items: flex-start; gap: 6px; transition: all 0.15s; border-left: 3px solid transparent; }
+        .toc-item:hover { background: #f0f4ff; border-left-color: #b0c4f7; }
+        .toc-item.active { background: #e8f0fe; border-left-color: #4a6cf7; }
+        .toc-item .checkbox { margin-top: 3px; width: 14px; height: 14px; cursor: pointer; flex-shrink: 0; accent-color: #4a6cf7; }
+        .toc-item .title-text { font-size: 13px; line-height: 1.3; color: #333; }
+        .toc-item .title-sub { font-size: 11px; color: #999; margin-top: 2px; line-height: 1.3; }
+        .toc-item .badge { font-size: 10px; background: #e8f0fe; color: #4a6cf7; padding: 0 5px; border-radius: 8px; flex-shrink: 0; }
+        .toc-item .badge-table { background: #e8f5e9; color: #388e3c; }
+        .toc-item .badge-more { font-size: 10px; color: #999; flex-shrink: 0; }
+        .section-content { padding: 16px 20px; }
+        .section-content .section-title { font-size: 16px; font-weight: 600; color: #1a1a2e; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #4a6cf7; }
+        .func-section { border: 1px solid #e8e8e8; border-radius: 8px; margin-bottom: 12px; overflow: hidden; cursor: pointer; transition: all 0.2s; }
+        .func-section:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .func-section.active-card { box-shadow: 0 0 0 2px #4a6cf7, 0 2px 8px rgba(74,108,247,0.2); }
+        .func-section .func-header { padding: 8px 12px; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+        .func-section .func-body { padding: 10px 14px; font-size: 13px; line-height: 1.7; color: #444; white-space: pre-wrap; background: #fff; }
+        .func-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+        .right-panel .test-point-list { padding: 8px; }
+        .right-panel .test-point-item { background: #fff; border: 1px solid #e8e8e8; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+        .right-panel .test-point-item .tp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+        .right-panel .test-point-item .tp-id { font-size: 12px; font-weight: 600; color: #4a6cf7; }
+        .right-panel .test-point-item .tp-priority { font-size: 11px; padding: 1px 6px; border-radius: 4px; }
+        .right-panel .test-point-item .tp-priority.high { background: #ffe8e8; color: #e53935; }
+        .right-panel .test-point-item .tp-priority.medium { background: #fff3e0; color: #f57c00; }
+        .right-panel .test-point-item .tp-priority.low { background: #e8f5e9; color: #388e3c; }
+        .right-panel .test-point-item .tp-desc { font-size: 13px; color: #333; line-height: 1.5; }
+        .right-panel .test-point-item .tp-type { font-size: 11px; color: #888; margin-top: 4px; }
+        .right-panel .test-point-item .tp-steps { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #eee; }
+        .right-panel .test-point-item .tp-step { font-size: 12px; color: #555; line-height: 1.6; padding: 1px 0; }
+        .right-panel .test-point-item .tp-step .step-num { color: #4a6cf7; font-weight: 600; margin-right: 4px; }
+        .right-panel .test-point-item .tp-expected { font-size: 12px; color: #2e7d32; line-height: 1.6; padding: 1px 0; }
+        .right-panel .test-point-item .tp-expected .exp-num { color: #388e3c; font-weight: 600; margin-right: 4px; }
+        .right-panel .no-selection { display: flex; align-items: center; justify-content: center; height: 100%; color: #999; font-size: 14px; }
+        .progress-bar { height: 4px; background: #e0e0e0; border-radius: 2px; overflow: hidden; margin: 8px 12px; }
+        .progress-bar .fill { height: 100%; background: linear-gradient(90deg, #4a6cf7, #6c63ff); border-radius: 2px; transition: width 0.5s; }
+        .status-text { font-size: 13px; color: #666; padding: 4px 12px; }
+        .action-bar { padding: 12px; border-top: 1px solid #e0e0e0; display: flex; gap: 8px; flex-shrink: 0; }
+        .action-bar button { flex: 1; padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+        .action-bar button.primary { background: #4a6cf7; color: #fff; }
+        .action-bar button.primary:hover { background: #3b5de7; }
+        .action-bar button.primary:disabled { background: #a0b4f7; cursor: not-allowed; }
+        .action-bar button.secondary { background: #e8e8e8; color: #333; }
+        .action-bar button.secondary:hover { background: #ddd; }
+        .review-section { padding: 12px; border-top: 1px solid #e0e0e0; flex-shrink: 0; }
+        .review-section textarea { width: 100%; height: 60px; border: 1px solid #ddd; border-radius: 6px; padding: 8px; font-size: 13px; resize: vertical; }
+        .review-section .review-actions { display: flex; gap: 8px; margin-top: 8px; }
+        .review-section .review-actions button { flex: 1; padding: 6px 12px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; }
+        .review-section .review-actions .approve { background: #4caf50; color: #fff; }
+        .review-section .review-actions .approve:hover { background: #43a047; }
+        .review-section .review-actions .reject { background: #f44336; color: #fff; }
+        .review-section .review-actions .reject:hover { background: #e53935; }
+        .hidden { display: none !important; }
+        .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #e0e0e0; border-top-color: #4a6cf7; border-radius: 50%; animation: spin 0.6s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .select-all-bar { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #666; }
+        .select-all-bar input { cursor: pointer; }
+        .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #999; font-size: 14px; padding: 20px; text-align: center; }
+        .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
+        .file-info { padding: 8px 12px; font-size: 12px; color: #666; border-bottom: 1px solid #f0f0f0; }
+        .file-info .name { font-weight: 500; color: #333; }
+        .thinking-section { padding: 12px; border-top: 1px solid #e0e0e0; flex-shrink: 0; }
+        .thinking-section .thinking-header { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: #666; }
+        .thinking-section .thinking-header:hover { color: #333; }
+        .thinking-section .thinking-content { font-size: 12px; color: #888; line-height: 1.6; margin-top: 8px; padding: 8px; background: #f8f9fa; border-radius: 6px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+        .thinking-section .thinking-content.collapsed { display: none; }
+        .arrow { transition: transform 0.2s; }
+        .arrow.expanded { transform: rotate(90deg); }
+        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: #fff; font-size: 14px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: slideIn 0.3s ease; max-width: 400px; word-break: break-all; }
+        .toast.success { background: #4caf50; }
+        .toast.error { background: #f44336; }
+        .toast.info { background: #4a6cf7; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>智能测试点分析系统</h1>
+            <span class="subtitle">上传文档 → 选择章节 → 自动分析 → 按原文片段查看测试点</span>
+        </div>
+        <div id="statusIndicator" style="font-size:13px;color:#8899aa;">就绪</div>
+    </div>
+
+    <div class="main-container">
+        <div class="left-panel">
+            <div class="panel-header">
+                <span>文档目录</span>
+                <span id="sectionCount" style="font-size:12px;color:#999;font-weight:400;">0 个章节</span>
+            </div>
+            <div id="uploadZone" class="upload-zone">
+                <div class="icon" id="uploadIcon">📄</div>
+                <div class="text" id="uploadText">点击上传或拖拽 .docx 文件</div>
+                <div class="hint" id="uploadHint">支持 Word 文档格式</div>
+                <div class="error-text hidden" id="uploadError"></div>
+                <input type="file" id="fileInput" accept=".docx" style="display:none">
+            </div>
+            <div id="fileInfo" class="file-info hidden">
+                文件：<span class="name" id="fileName"></span>
+            </div>
+            <div id="selectAllBar" class="select-all-bar hidden">
+                <input type="checkbox" id="selectAllCheckbox">
+                <label for="selectAllCheckbox">全选</label>
+                <span style="margin-left:auto;font-size:12px;color:#999;" id="selectedCount">已选 0 个</span>
+            </div>
+            <div class="panel-body" id="tocList"></div>
+            <div class="action-bar">
+                <button class="primary" id="startAnalysisBtn" disabled>开始分析</button>
+            </div>
+            <div id="progressSection" class="hidden">
+                <div class="progress-bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
+                <div class="status-text" id="statusText">就绪</div>
+            </div>
+            <div id="thinkingSection" class="thinking-section hidden">
+                <div class="thinking-header" id="thinkingToggle">
+                    <span class="arrow" id="thinkingArrow">▶</span>
+                    <span>分析过程</span>
+                    <span class="loading-spinner" id="thinkingSpinner"></span>
+                </div>
+                <div class="thinking-content collapsed" id="thinkingContent"></div>
+            </div>
+        </div>
+
+        <div class="middle-panel">
+            <div class="panel-header">
+                <span>文档内容</span>
+                <span id="contentInfo" style="font-size:12px;color:#999;font-weight:400;">请从左侧选择章节查看</span>
+            </div>
+            <div class="panel-body" id="contentArea">
+                <div class="empty-state">
+                    <div class="icon">📖</div>
+                    <div>上传文档后，从左侧目录选择章节查看内容</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <div class="panel-header">
+                <span>测试点</span>
+                <span id="testPointCount" style="font-size:12px;color:#999;font-weight:400;">0 个</span>
+            </div>
+            <div class="panel-body" id="testPointArea">
+                <div class="no-selection">请选择包含测试点的原文片段查看</div>
+            </div>
+            <div id="reviewSection" class="review-section hidden">
+                <textarea id="reviewInput" placeholder="请输入审核意见..."></textarea>
+                <div class="review-actions">
+                    <button class="approve" id="approveBtn">批准</button>
+                    <button class="reject" id="rejectBtn">驳回修改</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+(function() {
+    var sessionId = null;
+    var sectionsContent = [];
+    var tocData = [];
+    var selectedSections = new Set();
+    var aggregatedData = null;
+    var pollTimer = null;
+
+    var uploadZone = document.getElementById('uploadZone');
+    var fileInput = document.getElementById('fileInput');
+    var uploadIcon = document.getElementById('uploadIcon');
+    var uploadText = document.getElementById('uploadText');
+    var uploadHint = document.getElementById('uploadHint');
+    var uploadError = document.getElementById('uploadError');
+    var fileInfo = document.getElementById('fileInfo');
+    var fileName = document.getElementById('fileName');
+    var tocList = document.getElementById('tocList');
+    var sectionCount = document.getElementById('sectionCount');
+    var selectAllBar = document.getElementById('selectAllBar');
+    var selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    var selectedCount = document.getElementById('selectedCount');
+    var startAnalysisBtn = document.getElementById('startAnalysisBtn');
+    var progressSection = document.getElementById('progressSection');
+    var progressFill = document.getElementById('progressFill');
+    var statusText = document.getElementById('statusText');
+    var statusIndicator = document.getElementById('statusIndicator');
+    var thinkingSection = document.getElementById('thinkingSection');
+    var thinkingToggle = document.getElementById('thinkingToggle');
+    var thinkingArrow = document.getElementById('thinkingArrow');
+    var thinkingContent = document.getElementById('thinkingContent');
+    var thinkingSpinner = document.getElementById('thinkingSpinner');
+    var contentArea = document.getElementById('contentArea');
+    var contentInfo = document.getElementById('contentInfo');
+    var testPointArea = document.getElementById('testPointArea');
+    var testPointCount = document.getElementById('testPointCount');
+    var reviewSection = document.getElementById('reviewSection');
+    var reviewInput = document.getElementById('reviewInput');
+    var approveBtn = document.getElementById('approveBtn');
+    var rejectBtn = document.getElementById('rejectBtn');
+
+    function toast(msg, type) { type = type || 'info'; var t = document.createElement('div'); t.className = 'toast ' + type; t.textContent = msg; document.body.appendChild(t); setTimeout(function() { t.remove(); }, 3000); }
+
+    function setUploadState(state, msg) {
+        uploadZone.className = 'upload-zone' + (state ? ' ' + state : '');
+        uploadError.classList.toggle('hidden', state !== 'error');
+        if (state === 'uploading') {
+            uploadIcon.textContent = '⏳';
+            uploadText.textContent = msg || '正在上传...';
+            uploadHint.textContent = '请稍候';
+        } else if (state === 'error') {
+            uploadIcon.className = 'icon error-icon';
+            uploadIcon.textContent = '❌';
+            uploadText.textContent = '上传失败';
+            uploadError.textContent = msg || '未知错误';
+            uploadError.classList.remove('hidden');
+            var retryBtn = document.createElement('button');
+            retryBtn.className = 'retry-btn';
+            retryBtn.textContent = '重新上传';
+            retryBtn.onclick = function() { resetUpload(); };
+            uploadError.appendChild(retryBtn);
+        } else if (state === 'success') {
+            uploadIcon.textContent = '✅';
+            uploadText.textContent = '上传成功';
+            uploadHint.textContent = '点击重新上传';
+        } else {
+            uploadIcon.className = 'icon';
+            uploadIcon.textContent = '📄';
+            uploadText.textContent = '点击上传或拖拽 .docx 文件';
+            uploadHint.textContent = '支持 Word 文档格式';
+        }
+    }
+
+    function resetUpload() {
+        sessionId = null;
+        sectionsContent = [];
+        tocData = [];
+        selectedSections.clear();
+        aggregatedData = null;
+        setUploadState('');
+        fileInfo.classList.add('hidden');
+        selectAllBar.classList.add('hidden');
+        tocList.innerHTML = '';
+        sectionCount.textContent = '0 个章节';
+        startAnalysisBtn.disabled = true;
+        progressSection.classList.add('hidden');
+        thinkingSection.classList.add('hidden');
+        contentArea.innerHTML = '<div class="empty-state"><div class="icon">📖</div><div>上传文档后，从左侧目录选择章节查看内容</div></div>';
+        contentInfo.textContent = '请从左侧选择章节查看';
+        testPointArea.innerHTML = '<div class="no-selection">请选择包含测试点的原文片段查看</div>';
+        testPointCount.textContent = '0 个';
+        reviewSection.classList.add('hidden');
+        statusIndicator.textContent = '就绪';
+        fileInput.value = '';
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    function handleFile(file) {
+        if (!file) return;
+        var ext = file.name.toLowerCase().split('.').pop();
+        if (ext !== 'docx') { toast('仅支持 .docx 文件', 'error'); return; }
+        if (file.size === 0) { toast('文件为空，请选择有效的文档', 'error'); return; }
+
+        setUploadState('uploading', '正在上传...');
+        statusIndicator.textContent = '上传中';
+
+        var formData = new FormData();
+        formData.append('file', file);
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/upload', true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    var data = JSON.parse(xhr.responseText);
+                    onUploadSuccess(data, file.name);
+                } catch (e) {
+                    setUploadState('error', '解析响应失败');
+                }
+            } else {
+                var errMsg = '上传失败';
+                try { var err = JSON.parse(xhr.responseText); errMsg = err.detail || errMsg; } catch(e) {}
+                setUploadState('error', errMsg);
+            }
+        };
+        xhr.onerror = function() { setUploadState('error', '网络错误，请检查后端服务是否启动'); };
+        xhr.ontimeout = function() { setUploadState('error', '上传超时'); };
+        xhr.timeout = 60000;
+        xhr.send(formData);
+    }
+
+    function onUploadSuccess(data, name) {
+        sessionId = data.session_id;
+        tocData = data.toc || [];
+        setUploadState('success');
+        fileInfo.classList.remove('hidden');
+        fileName.textContent = name;
+        renderToc(tocData);
+        selectAllBar.classList.remove('hidden');
+        sectionCount.textContent = tocData.length + ' 个章节';
+        statusIndicator.textContent = '已上传';
+        startAnalysisBtn.disabled = false;
+        toast('文件上传成功，共 ' + tocData.length + ' 个章节', 'success');
+        fetchDocumentPreview();
+    }
+
+    function fetchDocumentPreview() {
+        if (!sessionId) return;
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/api/document-preview/' + encodeURIComponent(sessionId), true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    var data = JSON.parse(xhr.responseText);
+                    sectionsContent = data.sections_content || [];
+                } catch(e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    var SECTION_TYPE_COLORS = {
+        '功能描述': { bg: '#e3f2fd', text: '#1565c0', border: '#bbdefb' },
+        '业务规则': { bg: '#fce4ec', text: '#c62828', border: '#f8bbd0' },
+        '操作权限': { bg: '#f3e5f5', text: '#7b1fa2', border: '#e1bee7' },
+        '异常处理': { bg: '#fff3e0', text: '#e65100', border: '#ffe0b2' },
+        '处理过程': { bg: '#e8f5e9', text: '#2e7d32', border: '#c8e6c9' },
+        '处理流程': { bg: '#e0f2f1', text: '#00695c', border: '#b2dfdb' },
+        '功能场景描述': { bg: '#e8eaf6', text: '#283593', border: '#c5cae9' },
+        '外部接口': { bg: '#f9fbe7', text: '#827717', border: '#e6ee9c' },
+        '界面描述': { bg: '#f5f5f5', text: '#616161', border: '#e0e0e0' },
+        '界面输入/输出': { bg: '#f5f5f5', text: '#616161', border: '#e0e0e0' },
+        '业务流程': { bg: '#e0f2f1', text: '#00695c', border: '#b2dfdb' },
+        '特殊事项': { bg: '#fff8e1', text: '#f57f17', border: '#ffecb3' },
+    };
+    var KEY_TYPES = ['功能描述', '业务规则', '异常处理', '处理流程', '处理过程', '操作权限'];
+
+    function getSectionTypeColor(type) {
+        return SECTION_TYPE_COLORS[type] || { bg: '#f5f5f5', text: '#616161', border: '#e0e0e0' };
+    }
+
+    function renderToc(toc) {
+        tocList.innerHTML = '';
+        selectedSections.clear();
+        updateSelectedCount();
+
+        var groups = {};
+        toc.forEach(function(item) {
+            var g = item.level_2 || '其他';
+            if (!groups[g]) groups[g] = [];
+            groups[g].push(item);
+        });
+
+        var groupKeys = Object.keys(groups);
+        var first = true;
+        groupKeys.forEach(function(groupName) {
+            if (!first) {
+                var sep = document.createElement('div');
+                sep.style.cssText = 'height:1px;background:#f0f0f0;margin:4px 12px;';
+                tocList.appendChild(sep);
+            }
+            first = false;
+            var groupLabel = document.createElement('div');
+            groupLabel.className = 'toc-section-group';
+            groupLabel.textContent = groupName;
+            tocList.appendChild(groupLabel);
+
+            groups[groupName].forEach(function(item) {
+                var div = document.createElement('div');
+                div.className = 'toc-item';
+                div.dataset.index = item.index;
+
+                var cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'checkbox';
+                cb.checked = true;
+                selectedSections.add(item.index);
+                cb.addEventListener('change', function(e) {
+                    e.stopPropagation();
+                    if (cb.checked) { selectedSections.add(item.index); }
+                    else { selectedSections.delete(item.index); }
+                    updateSelectedCount();
+                });
+                div.appendChild(cb);
+
+                var textWrap = document.createElement('div');
+                textWrap.style.cssText = 'flex:1;min-width:0;';
+
+                var titleSpan = document.createElement('div');
+                titleSpan.className = 'title-text';
+                titleSpan.textContent = item.level_3 || item.title;
+                textWrap.appendChild(titleSpan);
+
+                if (item.level_4 && item.level_4 !== item.level_3) {
+                    var subSpan = document.createElement('div');
+                    subSpan.className = 'title-sub';
+                    subSpan.textContent = '› ' + item.level_4;
+                    textWrap.appendChild(subSpan);
+                }
+                div.appendChild(textWrap);
+
+                var badges = document.createElement('div');
+                badges.style.cssText = 'display:flex;gap:3px;align-items:center;flex-shrink:0;flex-wrap:wrap;';
+
+                if (item.has_tables) {
+                    var tb = document.createElement('span');
+                    tb.className = 'badge badge-table';
+                    tb.textContent = '表';
+                    badges.appendChild(tb);
+                }
+
+                var shownTypes = [];
+                var extraCount = 0;
+                if (item.function_types) {
+                    item.function_types.forEach(function(ft) {
+                        if (KEY_TYPES.indexOf(ft) !== -1 && shownTypes.indexOf(ft) === -1) {
+                            shownTypes.push(ft);
+                        }
+                    });
+                }
+                shownTypes.forEach(function(ft) {
+                    var b = document.createElement('span');
+                    b.className = 'badge';
+                    b.textContent = ft;
+                    badges.appendChild(b);
+                });
+
+                div.appendChild(badges);
+
+                div.addEventListener('click', function(e) {
+                    if (e.target === cb || e.target.tagName === 'INPUT') return;
+                    document.querySelectorAll('.toc-item').forEach(function(el) { el.classList.remove('active'); });
+                    div.classList.add('active');
+                    showSectionContent(item.index);
+                });
+
+                tocList.appendChild(div);
+            });
+        });
+        updateSelectedCount();
+        selectAllCheckbox.checked = true;
+    }
+
+    function updateSelectedCount() {
+        var count = selectedSections.size;
+        selectedCount.textContent = '已选 ' + count + ' 个';
+        startAnalysisBtn.disabled = count === 0;
+    }
+
+    selectAllCheckbox.addEventListener('change', function() {
+        var checked = this.checked;
+        document.querySelectorAll('.toc-item .checkbox').forEach(function(cb) {
+            cb.checked = checked;
+            var index = parseInt(cb.closest('.toc-item').dataset.index);
+            if (!isNaN(index)) {
+                if (checked) { selectedSections.add(index); }
+                else { selectedSections.delete(index); }
+            }
+        });
+        updateSelectedCount();
+    });
+
+    function showSectionContent(index) {
+        if (sectionsContent.length === 0) {
+            contentArea.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><div>正在加载章节内容...</div></div>';
+            return;
+        }
+        var sec = sectionsContent[index];
+        if (!sec) return;
+        contentInfo.textContent = sec.title;
+        var currentSectionTitle = sec.title;
+        var html = '<div class="section-content">';
+        html += '<div class="section-title">' + escapeHtml(sec.title) + '</div>';
+
+        if (sec.function_sections && sec.function_sections.length > 0) {
+            sec.function_sections.forEach(function(fs) {
+                var c = getSectionTypeColor(fs.section_type);
+                html += '<div class="func-section" data-section-type="' + escapeAttr(fs.section_type) + '" style="border-color:' + c.border + ';">';
+                html += '<div class="func-header" style="background:' + c.bg + ';color:' + c.text + ';border-bottom:1px solid ' + c.border + ';">';
+                html += '<span class="func-tag" style="background:' + c.text + ';color:#fff;">' + escapeHtml(fs.section_type) + '</span>';
+                html += escapeHtml(fs.section_type) + '</div>';
+                html += '<div class="func-body">' + escapeHtml(fs.content) + '</div>';
+                html += '</div>';
+            });
+        }
+
+        if (sec.tables && sec.tables.length > 0) {
+            html += '<div style="margin-top:12px;font-size:13px;font-weight:600;color:#666;padding:4px 0;">表格数据</div>';
+            sec.tables.forEach(function(table, ti) {
+                html += '<div style="margin-top:8px;"><strong>表格' + (ti + 1) + '</strong>';
+                if (table.caption) html += ' - ' + escapeHtml(table.caption);
+                html += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;margin-top:6px;font-size:13px;">';
+                html += '<thead><tr>';
+                (table.headers || []).forEach(function(h) {
+                    html += '<th style="border:1px solid #ddd;padding:6px 8px;background:#f5f5f5;text-align:left;">' + escapeHtml(h) + '</th>';
+                });
+                html += '</tr></thead><tbody>';
+                (table.rows || []).forEach(function(row) {
+                    html += '<tr>';
+                    row.forEach(function(cell) {
+                        html += '<td style="border:1px solid #ddd;padding:6px 8px;">' + escapeHtml(cell) + '</td>';
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody></table></div></div>';
+            });
+        }
+
+        html += '</div>';
+        contentArea.innerHTML = html;
+
+        var activeFilterType = null;
+
+        contentArea.querySelectorAll('.func-section').forEach(function(el) {
+            el.addEventListener('click', function(e) {
+                var sectionType = el.dataset.sectionType;
+                if (activeFilterType === sectionType) {
+                    activeFilterType = null;
+                    contentArea.querySelectorAll('.func-section').forEach(function(c) { c.classList.remove('active-card'); });
+                    showFilteredTestPoints(currentSectionTitle, null);
+                } else {
+                    activeFilterType = sectionType;
+                    contentArea.querySelectorAll('.func-section').forEach(function(c) { c.classList.remove('active-card'); });
+                    el.classList.add('active-card');
+                    showFilteredTestPoints(currentSectionTitle, sectionType);
+                }
+            });
+        });
+
+        showFilteredTestPoints(currentSectionTitle, null);
+    }
+
+    function showFilteredTestPoints(sectionTitle, sourceType) {
+        if (!aggregatedData || !aggregatedData.fragments) {
+            testPointArea.innerHTML = '<div class="no-selection">暂无测试点数据</div>';
+            testPointCount.textContent = '0 个';
+            return;
+        }
+        var sectionFrags = aggregatedData.fragments.filter(function(f) {
+            var ft = f.section_title || '';
+            return ft === sectionTitle || ft.indexOf(sectionTitle) === 0 || sectionTitle.indexOf(ft) === 0;
+        });
+        if (sectionFrags.length === 0) {
+            testPointArea.innerHTML = '<div class="no-selection">该章节暂无测试点</div>';
+            testPointCount.textContent = '0 个';
+            return;
+        }
+
+        var allPoints = [];
+        var seenIds = {};
+        sectionFrags.forEach(function(frag) {
+            (frag.test_points || []).forEach(function(tp) {
+                if (sourceType && tp.source_type !== sourceType) return;
+                if (!seenIds[tp.test_point_id]) {
+                    seenIds[tp.test_point_id] = 0;
+                }
+                seenIds[tp.test_point_id]++;
+                allPoints.push(tp);
+            });
+        });
+
+        if (allPoints.length === 0) {
+            var emptyMsg = sourceType ? '该章节暂无「' + sourceType + '」相关测试点' : '该章节暂无测试点';
+            testPointArea.innerHTML = '<div class="no-selection">' + emptyMsg + '</div>';
+            testPointCount.textContent = '0 个';
+            return;
+        }
+
+        testPointCount.textContent = allPoints.length + ' 个';
+        var html = '<div style="padding:4px 8px;font-size:12px;color:#888;">';
+        if (sourceType) {
+            html += '筛选：' + sourceType + '（点击取消筛选）';
+        } else {
+            html += '全部测试点（点击分类卡片筛选）';
+        }
+        html += '</div>';
+        html += '<div class="test-point-list">';
+
+        var sourceTypeColors = {
+            '功能描述': { bg: '#e3f2fd', text: '#1565c0' },
+            '业务规则': { bg: '#fce4ec', text: '#c62828' },
+            '操作权限': { bg: '#f3e5f5', text: '#7b1fa2' },
+            '异常处理': { bg: '#fff3e0', text: '#e65100' },
+            '处理流程': { bg: '#e8f5e9', text: '#2e7d32' },
+            '处理过程': { bg: '#e0f2f1', text: '#00695c' },
+            '表格': { bg: '#e8f5e9', text: '#388e3c' },
+        };
+
+        allPoints.forEach(function(tp) {
+            var priorityClass = 'low';
+            if (tp.priority === '高' || tp.priority === 'high') priorityClass = 'high';
+            else if (tp.priority === '中' || tp.priority === 'medium') priorityClass = 'medium';
+
+            var stc = sourceTypeColors[tp.source_type] || { bg: '#f5f5f5', text: '#616161' };
+
+            html += '<div class="test-point-item">';
+            html += '<div class="tp-header"><span class="tp-id">' + escapeHtml(tp.test_point_id) + '</span>';
+            html += '<span class="tp-priority ' + priorityClass + '">' + escapeHtml(tp.priority) + '</span></div>';
+            html += '<div class="tp-desc">' + escapeHtml(tp.description) + '</div>';
+            if (tp.steps && tp.steps.length > 0) {
+                html += '<div class="tp-steps">';
+                tp.steps.forEach(function(s) {
+                    var num = s.match(/^(\d+)\./);
+                    var numStr = num ? num[1] + '.' : '';
+                    var text = num ? s.substring(num[0].length).trim() : s;
+                    html += '<div class="tp-step"><span class="step-num">' + escapeHtml(numStr) + '</span>' + escapeHtml(text) + '</div>';
+                });
+                if (tp.expected_results && tp.expected_results.length > 0) {
+                    tp.expected_results.forEach(function(er) {
+                        var num = er.match(/^(\d+)\./);
+                        var numStr = num ? num[1] + '.' : '';
+                        var text = num ? er.substring(num[0].length).trim() : er;
+                        html += '<div class="tp-expected"><span class="exp-num">' + escapeHtml(numStr) + '</span>预期：' + escapeHtml(text) + '</div>';
+                    });
+                }
+                html += '</div>';
+            }
+            html += '<div class="tp-type" style="display:flex;align-items:center;gap:6px;margin-top:6px;">';
+            html += '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:500;background:' + stc.bg + ';color:' + stc.text + ';">' + escapeHtml(tp.source_type) + '</span>';
+            if (seenIds[tp.test_point_id] > 1) {
+                html += '<span style="font-size:11px;color:#e65100;">跨模块</span>';
+            }
+            html += '<span style="font-size:11px;color:#888;">' + escapeHtml(tp.test_type) + '</span>';
+            html += '</div></div>';
+        });
+        html += '</div>';
+        testPointArea.innerHTML = html;
+    }
+
+    startAnalysisBtn.addEventListener('click', function() {
+        if (!sessionId || selectedSections.size === 0) return;
+        startAnalysisBtn.disabled = true;
+        progressSection.classList.remove('hidden');
+        thinkingSection.classList.remove('hidden');
+        thinkingContent.classList.add('collapsed');
+        thinkingArrow.classList.remove('expanded');
+        progressFill.style.width = '0%';
+        statusText.textContent = '正在启动分析...';
+        statusIndicator.textContent = '分析中';
+        var selected = Array.from(selectedSections);
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/start-analysis', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                toast('分析已启动', 'info');
+                startPolling();
+            } else {
+                startAnalysisBtn.disabled = false;
+                progressSection.classList.add('hidden');
+                statusIndicator.textContent = '就绪';
+                var errMsg = '启动分析失败';
+                try { var err = JSON.parse(xhr.responseText); errMsg = err.detail || errMsg; } catch(e) {}
+                toast(errMsg, 'error');
+            }
+        };
+        xhr.onerror = function() {
+            startAnalysisBtn.disabled = false;
+            progressSection.classList.add('hidden');
+            toast('网络错误', 'error');
+        };
+        xhr.send(JSON.stringify({ session_id: sessionId, selected_sections: selected }));
+    });
+
+    function startPolling() {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(function() {
+            if (!sessionId) { clearInterval(pollTimer); pollTimer = null; return; }
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/api/analysis-status/' + encodeURIComponent(sessionId), true);
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        updateProgress(data);
+                        if (data.status === 'completed' || data.status === 'error') {
+                            clearInterval(pollTimer);
+                            pollTimer = null;
+                            if (data.status === 'completed') {
+                                fetchResult();
+                            }
+                        }
+                    } catch(e) {}
+                }
+            };
+            xhr.send();
+        }, 2000);
+    }
+
+    function updateProgress(data) {
+        var statusMap = {
+            'starting': '正在启动分析...',
+            'parsing': '正在解析Word文档...',
+            'analyzing': '正在分析测试点...',
+            'awaiting_review': '等待用户审核',
+            'completed': '分析完成',
+            'error': '分析出错'
+        };
+        var pctMap = {
+            'starting': 5,
+            'parsing': 20,
+            'analyzing': 60,
+            'awaiting_review': 90,
+            'completed': 100,
+            'error': 100
+        };
+        statusText.textContent = data.progress || statusMap[data.status] || data.status;
+        progressFill.style.width = (pctMap[data.status] || 50) + '%';
+        if (data.status === 'awaiting_review') {
+            reviewSection.classList.remove('hidden');
+            statusIndicator.textContent = '待审核';
+        }
+        if (data.status === 'error') {
+            statusIndicator.textContent = '出错';
+            startAnalysisBtn.disabled = false;
+            toast(data.message || '分析出错', 'error');
+        }
+    }
+
+    function fetchResult() {
+        if (!sessionId) return;
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/api/analysis-result/' + encodeURIComponent(sessionId), true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    var data = JSON.parse(xhr.responseText);
+                    aggregatedData = data.aggregated_analysis || null;
+                    statusIndicator.textContent = '已完成';
+                    progressFill.style.width = '100%';
+                    statusText.textContent = '分析完成';
+                    startAnalysisBtn.disabled = false;
+                    var total = aggregatedData ? aggregatedData.total_test_points || 0 : 0;
+                    toast('分析完成，共生成 ' + total + ' 个测试点', 'success');
+                    reviewSection.classList.add('hidden');
+                    if (aggregatedData && sectionsContent.length > 0) {
+                        var activeItem = document.querySelector('.toc-item.active');
+                        if (activeItem) {
+                            showSectionContent(parseInt(activeItem.dataset.index));
+                        } else {
+                            var currentContentTitle = contentInfo.textContent;
+                            if (currentContentTitle && currentContentTitle !== '请从左侧选择章节查看') {
+                                showFilteredTestPoints(currentContentTitle, null);
+                            } else if (sectionsContent.length > 0) {
+                                var firstItem = document.querySelector('.toc-item');
+                                if (firstItem) firstItem.classList.add('active');
+                                showSectionContent(0);
+                            }
+                        }
+                    }
+                } catch(e) {
+                    toast('解析结果失败', 'error');
+                }
+            }
+        };
+        xhr.send();
+    }
+
+    approveBtn.addEventListener('click', function() {
+        submitReview('y');
+    });
+
+    rejectBtn.addEventListener('click', function() {
+        var msg = reviewInput.value.trim();
+        if (!msg) { toast('请输入修改意见', 'error'); return; }
+        submitReview(msg);
+    });
+
+    function submitReview(userInput) {
+        if (!sessionId) return;
+        reviewSection.classList.add('hidden');
+        statusIndicator.textContent = '提交审核中';
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/submit-review', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                toast('审核已提交', 'success');
+                fetchResult();
+            } else {
+                reviewSection.classList.remove('hidden');
+                statusIndicator.textContent = '待审核';
+                var errMsg = '提交审核失败';
+                try { var err = JSON.parse(xhr.responseText); errMsg = err.detail || errMsg; } catch(e) {}
+                toast(errMsg, 'error');
+            }
+        };
+        xhr.send(JSON.stringify({ session_id: sessionId, user_input: userInput }));
+    }
+
+    thinkingToggle.addEventListener('click', function() {
+        thinkingContent.classList.toggle('collapsed');
+        thinkingArrow.classList.toggle('expanded');
+    });
+
+    uploadZone.addEventListener('click', function(e) {
+        if (uploadZone.classList.contains('uploading')) return;
+        fileInput.click();
+    });
+
+    fileInput.addEventListener('change', function() {
+        if (fileInput.files && fileInput.files.length > 0) {
+            handleFile(fileInput.files[0]);
+        }
+    });
+
+    uploadZone.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!uploadZone.classList.contains('uploading')) {
+            uploadZone.classList.add('dragover');
+        }
+    });
+
+    uploadZone.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadZone.classList.remove('dragover');
+    });
+
+    uploadZone.addEventListener('drop', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadZone.classList.remove('dragover');
+        if (uploadZone.classList.contains('uploading')) return;
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            handleFile(e.dataTransfer.files[0]);
+        }
+    });
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    function escapeAttr(str) {
+        if (!str) return '';
+        return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+})();
+</script>
+</body>
+</html>

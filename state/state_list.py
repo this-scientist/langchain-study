@@ -1,31 +1,40 @@
-from typing import TypedDict, List, Annotated, Optional
-import operator
-from langgraph.graph.message import add_messages
-from struct_output.output_list import ParsedDoc,StructuredDoc
-
-class AgentState(TypedDict):
-    # 对话历史，持续累加
-    messages: Annotated[List[str], operator.add]
-    
-    # 供用户选择的建议动作列表
-    # 例如: ["执行代码", "修改文件", "运行测试", "退出"]
-    suggested_actions: List[str]
-    
-    # 用户最终选择的动作
-    chosen_action: Optional[str]
-    
-    # 当前任务是否结束
-    is_finished: bool
-
-class OverallState(TypedDict):
-    raw_text: str
-    struct_data: Optional[ParsedDoc]
-    final_summary: str
+from typing import TypedDict, List, Optional, Union
+from struct_output.output_list import (
+    StructuredDoc, ParsedDocWithMetadata, 
+    TestPointAnalysis, ApprovalFeedback, TestAnalysisWithApproval,
+    CategorizedTestAnalysis, CategorizedTestPoints, UserReviewStatus,
+    AggregatedTestAnalysis,
+)
 
 
-# --- TypedDict: 定义图的状态 ---
 class DocState(TypedDict):
     file_path: str
-    raw_text_chunks: List[str]    # 存储初步读取的文本
-    parsed_data: Optional[StructuredDoc] # 存储 Agent 整理后的结果
+    raw_text_chunks: List[str]
+    parsed_data: Optional[Union[StructuredDoc, ParsedDocWithMetadata]]
     index_status: str
+    selected_section_indices: List[int]
+
+    test_point_analysis: Optional[TestPointAnalysis]
+    approval_feedback: Optional[ApprovalFeedback]
+    test_analysis_result: Optional[TestAnalysisWithApproval]
+    iteration_count: int
+    max_iterations: int
+    is_approved: bool
+
+    categorized_analysis: Optional[CategorizedTestAnalysis]
+    table_test_points: Optional[CategorizedTestPoints]
+    func_desc_test_points: Optional[CategorizedTestPoints]
+    business_rule_test_points: Optional[CategorizedTestPoints]
+    exception_test_points: Optional[CategorizedTestPoints]
+    process_test_points: Optional[CategorizedTestPoints]
+
+    user_review: Optional[UserReviewStatus]
+    user_interrupted: bool
+    resume_from_node: str
+
+    aggregated_analysis: Optional[AggregatedTestAnalysis]
+    table_aggregated: Optional[AggregatedTestAnalysis]
+    func_desc_aggregated: Optional[AggregatedTestAnalysis]
+    business_rule_aggregated: Optional[AggregatedTestAnalysis]
+    exception_aggregated: Optional[AggregatedTestAnalysis]
+    process_aggregated: Optional[AggregatedTestAnalysis]
