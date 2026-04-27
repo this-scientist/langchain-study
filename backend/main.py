@@ -3,7 +3,7 @@ import sys
 import uuid
 import threading
 import traceback
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
@@ -56,13 +56,19 @@ class StartAnalysisInput(BaseModel):
     selected_sections: List[int] = Field(default=[], description="选中的章节索引列表，为空则分析所有章节")
 
 
-def run_analysis_in_thread(session_id: str, doc_path: str, selected_indices: List[int] = None):
+def run_analysis_in_thread(session_id: str, doc_path: str, selected_indices: List[int] = None, parsed_data: Any = None):
     try:
         sessions[session_id]["status"] = "parsing"
-        sessions[session_id]["progress"] = "正在解析Word文档..."
+        sessions[session_id]["progress"] = "正在分析测试点..."
         sessions[session_id]["message"] = ""
 
-        result, config = run_with_user_interrupt(doc_path, max_iterations=3, thread_id=session_id, selected_indices=selected_indices)
+        result, config = run_with_user_interrupt(
+            doc_path, 
+            max_iterations=3, 
+            thread_id=session_id, 
+            selected_indices=selected_indices,
+            parsed_data=parsed_data
+        )
 
         sessions[session_id]["config"] = config
 
@@ -192,6 +198,7 @@ async def upload_file(file: UploadFile = File(...)):
             "progress": "文件已上传",
             "file_path": file_path,
             "file_name": file.filename,
+            "parsed_data": parsed_data,
             "result": None,
             "config": None,
             "aggregated_analysis": None,
@@ -258,7 +265,10 @@ def start_analysis(input_data: StartAnalysisInput):
     thread = threading.Thread(
         target=run_analysis_in_thread,
         args=(session_id, session["file_path"]),
-        kwargs={"selected_indices": input_data.selected_sections},
+        kwargs={
+            "selected_indices": input_data.selected_sections,
+            "parsed_data": session.get("parsed_data")
+        },
         daemon=True,
     )
     thread.start()
@@ -334,6 +344,33 @@ def submit_review(input_data: UserReviewInput):
         session["status"] = "error"
         session["message"] = f"恢复流程失败: {str(e)}"
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/stop-analysis/{session_id}")
+def stop_analysis(session_id: str):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    
+    session = sessions[session_id]
+    if session["status"] not in ("starting", "parsing", "awaiting_review"):
+        return {"status": session["status"], "message": "当前流程不在运行中"}
+
+    config = session.get("config")
+    if config:
+        try:
+            # 通过更新图状态来触发停止
+            langgraph_app.update_state(config, {"is_cancelled": True})
+            session["status"] = "stopped"
+            session["progress"] = "分析已手动停止"
+            session["message"] = "用户已停止分析任务"
+            return {"session_id": session_id, "status": "stopped"}
+        except Exception as e:
+            # 如果由于处于 interrupt 状态导致无法更新，则直接标记状态
+            session["status"] = "stopped"
+            return {"session_id": session_id, "status": "stopped", "warning": str(e)}
+    
+    session["status"] = "stopped"
+    return {"session_id": session_id, "status": "stopped"}
 
 
 if __name__ == "__main__":

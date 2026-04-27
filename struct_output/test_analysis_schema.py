@@ -23,31 +23,7 @@ class SourceFragment(BaseModel):
     content: str = Field(description="原文内容片段")
 
 
-class TableAnalysisResult(BaseModel):
-    source_fragments: List[SourceFragment] = Field(description="所有引用的原文片段（去重）")
-    test_points: List[TestPointItem] = Field(description="测试点列表，通过 source_fragment_index 关联原文")
-    coverage_analysis: str = Field(description="测试覆盖率分析")
-
-
-class FuncDescAnalysisResult(BaseModel):
-    source_fragments: List[SourceFragment] = Field(description="所有引用的原文片段（去重）")
-    test_points: List[TestPointItem] = Field(description="测试点列表，通过 source_fragment_index 关联原文")
-    coverage_analysis: str = Field(description="测试覆盖率分析")
-
-
-class BusinessRuleAnalysisResult(BaseModel):
-    source_fragments: List[SourceFragment] = Field(description="所有引用的原文片段（去重）")
-    test_points: List[TestPointItem] = Field(description="测试点列表，通过 source_fragment_index 关联原文")
-    coverage_analysis: str = Field(description="测试覆盖率分析")
-
-
-class ExceptionAnalysisResult(BaseModel):
-    source_fragments: List[SourceFragment] = Field(description="所有引用的原文片段（去重）")
-    test_points: List[TestPointItem] = Field(description="测试点列表，通过 source_fragment_index 关联原文")
-    coverage_analysis: str = Field(description="测试覆盖率分析")
-
-
-class ProcessAnalysisResult(BaseModel):
+class AnalysisResult(BaseModel):
     source_fragments: List[SourceFragment] = Field(description="所有引用的原文片段（去重）")
     test_points: List[TestPointItem] = Field(description="测试点列表，通过 source_fragment_index 关联原文")
     coverage_analysis: str = Field(description="测试覆盖率分析")
