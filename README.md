@@ -16,29 +16,25 @@
 │                                                             │
 │  POST /api/upload         上传 .docx 并解析章节             │
 │  POST /api/start-analysis  启动 LangGraph 分析流程          │
+│  POST /api/stop-analysis   手动停止当前分析任务             │
 │  GET  /api/analysis-status  轮询分析进度                    │
 │  GET  /api/analysis-result  获取分析结果                    │
 │  POST /api/submit-review   提交审核意见                     │
 └─────────────────────────┬───────────────────────────────────┘
                           │ Python function call
                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    LangGraph Workflow                        │
-│              (test_analysis_workflow.py)                     │
-│                                                             │
-│  parser ──► indexer ──► [5 x analyzer nodes]               │
-│                              │                              │
-│                              ▼                              │
-│                    merge_aggregated                          │
-│                              │                              │
-│                              ▼                              │
-│                       review_agent                          │
-│                              │                              │
-│                              ▼                              │
-│                       user_review ──► finalizer             │
-│                              │  (needs_revision)            │
-│                              └──── reanalyze ──► analyzers  │
-└─────────────────────────┬───────────────────────────────────┘
+LangGraph Workflow (test_analysis_workflow.py)
+
+increment_iteration ──► analysis_coordinator ──► merge_aggregated
+                                │                              │
+                                ▼                              ▼
+                         review_agent                  test_case_generation
+                                │                              │
+                                ▼                              ▼
+                         user_review ──► finalizer ──────────► END
+                                │  (needs_revision)            ▲
+                                └──── reanalyze ──► coordinator┘
+                                     (max_iterations limit)
                           │ LLM call
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
@@ -60,27 +56,38 @@ langchain-study/
 ├── graph/
 │   └── test_analysis_workflow.py # LangGraph 工作流定义与编排
 ├── node/
-│   ├── node_list.py             # Word 文档解析节点（python-docx）
-│   └── test_analysis_nodes.py   # 5 个分析节点 + merge + review 节点
+│   ├── node_list.py             # Word 文档解析节点（已弃用，改由前端触发）
+│   └── test_analysis_nodes.py   # 5 个分析节点 + merge + review + 占位生成节点
 ├── state/
-│   └── state_list.py            # DocState：工作流全局状态定义
+│   └── state_list.py            # DocState：工作流全局状态定义（新增 is_cancelled 暂停支持）
 ├── struct_output/
 │   ├── output_list.py           # 数据模型：章节、测试点、聚合测试点
-│   └── test_analysis_schema.py  # LLM 输出 schema（带 steps/expected_results）
+│   └── test_analysis_schema.py  # LLM 输出 schema（统一为 AnalysisResult）
 ├── prompt/
 │   └── test_analysis/           # 6 个分析 prompt 模板
-│       ├── table_analysis.py
-│       ├── func_desc_analysis.py
-│       ├── business_rule_analysis.py
-│       ├── exception_analysis.py
-│       ├── process_analysis.py
-│       └── review_agent.py
-├── static/                      # 上传的 .docx 源文件
-├── .env                         # 环境变量（API Key、LangSmith 配置）
+├── .env                         # 环境变量（API Key、LangSmith 追踪配置）
 └── README.md
 ```
 
-## 前端交互流程
+## 核心优化记录 (死循环修复与功能增强)
+
+### 1. 死循环风险修复
+- **最大迭代限制**：在 `test_analysis_workflow.py` 中引入 `max_iterations` 状态，默认限制为 3 次迭代。若用户评审不通过且达到上限，流程将强制进入 `finalizer` 结束，防止无限消耗 Token。
+- **状态写入修正**：修复了 `analysis_coordinator` 节点未将子分析节点结果写回 State 的 Bug，确保 `merge_aggregated` 节点始终能拿到完整的上下文数据。
+
+### 2. 手动暂停功能
+- **状态注入**：在 `DocState` 中新增 `is_cancelled` 标志位。
+- **异步中断**：后端通过 `POST /api/stop-analysis` 接口调用 `langgraph_app.update_state` 实时将 `is_cancelled` 设为 `True`。
+- **节点检查**：核心分析节点和条件跳转 `should_continue` 会优先检查取消标志，实现秒级响应停机。
+
+### 3. Schema 重构与统一
+- **模型精简**：将原本冗余的 5 个分析模型（TableAnalysisResult 等）统一为 `AnalysisResult`，降低了代码维护成本并提高了 LLM 输出的稳定性。
+
+### 4. 流程链路优化
+- **移除冗余节点**：移除了工作流中重复的 `parser` 和 `indexer` 节点，改由前端解析后通过 `parsed_data` 直接注入初始状态，显著提升首轮响应速度。
+- **占位生成节点**：新增 `test_case_generation_node` 占位，为后续从测试点直接生成测试用例文档预留了扩展空间。
+
+## 环境准备与启动
 
 ```
 用户操作                    前端                       后端                        AI
