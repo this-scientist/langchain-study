@@ -3,6 +3,7 @@ import sys
 import uuid
 import threading
 import traceback
+import json
 from typing import Dict, Optional, List, Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -14,15 +15,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from graph.test_analysis_workflow import app as langgraph_app
-from graph.test_analysis_workflow import run_with_user_interrupt, resume_after_user_review
+from graph.test_analysis_workflow import app as langgraph_app, run_task_analysis
 from node.node_list import WordDocumentParser
-from struct_output.output_list import DocSectionWithMetadata
+from db.database import db_manager
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-app = FastAPI(title="测试点分析系统", version="2.0.0")
+app = FastAPI(title="测试点分析系统", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,97 +43,53 @@ def serve_index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
+# 内存中仅保存运行中的任务进度，最终结果从数据库读取
 sessions: Dict[str, dict] = {}
 
 
-class UserReviewInput(BaseModel):
-    session_id: str
-    user_input: str
-
-
 class StartAnalysisInput(BaseModel):
-    session_id: str
-    selected_sections: List[int] = Field(default=[], description="选中的章节索引列表，为空则分析所有章节")
+    task_id: str
+    selected_part_ids: List[str] = Field(..., description="选中的需求片段ID列表")
 
 
-def run_analysis_in_thread(session_id: str, doc_path: str, selected_indices: List[int] = None, parsed_data: Any = None):
+def run_analysis_in_thread(task_id: str, doc_id: str, file_path: str, part_ids: List[str]):
     try:
-        sessions[session_id]["status"] = "parsing"
-        sessions[session_id]["progress"] = "正在分析测试点..."
-        sessions[session_id]["message"] = ""
+        # 更新数据库任务状态
+        db_manager.update_task_status(task_id, "running")
+        
+        # 启动 LangGraph 工作流
+        # thread_id 使用 task_id
+        config = {"configurable": {"thread_id": task_id}}
+        
+        # 在内存中记录状态，方便前端查询进度
+        sessions[task_id] = {
+            "status": "analyzing",
+            "progress": "准备开始分析...",
+            "message": "",
+            "task_id": task_id,
+            "doc_id": doc_id
+        }
 
-        result, config = run_with_user_interrupt(
-            doc_path, 
-            max_iterations=3, 
-            thread_id=session_id, 
-            selected_indices=selected_indices,
-            parsed_data=parsed_data
-        )
+        # 执行工作流
+        # 我们使用 stream 来获取中间进度更新（可选，这里先简单调用）
+        result, _ = run_task_analysis(task_id, doc_id, file_path, part_ids, thread_id=task_id)
 
-        sessions[session_id]["config"] = config
-
-        if result:
-            sessions[session_id]["status"] = "completed"
-            sessions[session_id]["progress"] = "分析完成"
-            sessions[session_id]["result"] = _serialize_result(result)
-            sessions[session_id]["message"] = "分析完成"
-
-            aggregated = result.get("aggregated_analysis")
-            if aggregated:
-                sessions[session_id]["aggregated_analysis"] = _to_dict(aggregated)
-        else:
-            sessions[session_id]["status"] = "awaiting_review"
-            sessions[session_id]["progress"] = "等待用户审核"
-            sessions[session_id]["message"] = "测试点分析已完成，请审核并输入意见"
-
-            state = langgraph_app.get_state(config)
-            if state:
-                aggregated = state.values.get("aggregated_analysis")
-                if aggregated:
-                    sessions[session_id]["aggregated_analysis"] = _to_dict(aggregated)
-                sessions[session_id]["approval_feedback"] = _serialize_approval(
-                    state.values.get("approval_feedback")
-                )
+        # 任务完成
+        db_manager.update_task_status(task_id, "completed")
+        
+        if task_id in sessions:
+            sessions[task_id]["status"] = "completed"
+            sessions[task_id]["progress"] = "分析完成"
 
     except Exception as e:
-        sessions[session_id]["status"] = "error"
-        sessions[session_id]["progress"] = "分析出错"
-        sessions[session_id]["message"] = f"{str(e)}\n{traceback.format_exc()}"
-
-
-def _serialize_result(result: dict) -> dict:
-    serialized = {}
-    for key, value in result.items():
-        if hasattr(value, "model_dump"):
-            serialized[key] = value.model_dump()
-        elif hasattr(value, "dict"):
-            serialized[key] = value.dict()
-        elif isinstance(value, list):
-            serialized[key] = [_to_dict(v) for v in value]
-        else:
-            try:
-                serialized[key] = str(value)
-            except Exception:
-                serialized[key] = None
-    return serialized
-
-
-def _to_dict(obj):
-    if hasattr(obj, "model_dump"):
-        return obj.model_dump()
-    if hasattr(obj, "dict"):
-        return obj.dict()
-    if isinstance(obj, dict):
-        return {k: _to_dict(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_to_dict(v) for v in obj]
-    return str(obj)
-
-
-def _serialize_approval(approval) -> Optional[dict]:
-    if not approval:
-        return None
-    return _to_dict(approval)
+        error_msg = f"{str(e)}\n{traceback.format_exc()}"
+        print(f"Error in analysis thread: {error_msg}")
+        db_manager.update_task_status(task_id, "failed", error_message=str(e))
+        
+        if task_id in sessions:
+            sessions[task_id]["status"] = "error"
+            sessions[task_id]["progress"] = "分析出错"
+            sessions[task_id]["message"] = str(e)
 
 
 @app.get("/api/health")
@@ -146,8 +102,8 @@ async def upload_file(file: UploadFile = File(...)):
     if not file.filename or not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="仅支持 .docx 文件")
 
-    session_id = str(uuid.uuid4())
-    safe_filename = f"{session_id}.docx"
+    file_id = str(uuid.uuid4())
+    safe_filename = f"{file_id}.docx"
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
 
     try:
@@ -157,222 +113,133 @@ async def upload_file(file: UploadFile = File(...)):
         with open(file_path, "wb") as f:
             f.write(content)
 
+        # 解析文档
         parser = WordDocumentParser(file_path)
         parsed_data = parser.parse_section_3()
 
         if not parsed_data or not parsed_data.sections:
             raise HTTPException(status_code=400, detail="文档解析失败：未找到章节内容")
 
+        # 将解析后的文档及其片段保存到数据库
+        doc_id = db_manager.save_parsed_document(file.filename, file_path, parsed_data)
+
+        # 构造返回给前端的目录结构，包含片段 ID
+        doc_info = db_manager.get_document(doc_id)
+        
         toc = []
-        for i, sec in enumerate(parsed_data.sections):
+        for sec in doc_info['sections']:
+            parts = []
+            for part in sec['function_sections']:
+                parts.append({
+                    "id": part['id'],
+                    "type": part['section_type'],
+                    "content_preview": part['content'][:100] + "..." if len(part['content']) > 100 else part['content']
+                })
+            
             toc.append({
-                "index": i,
-                "title": sec.title,
-                "level": sec.level,
-                "level_2": sec.metadata.level_2,
-                "level_3": sec.metadata.level_3,
-                "level_4": sec.metadata.level_4,
-                "content_preview": sec.content[:200] + ("..." if len(sec.content) > 200 else ""),
-                "has_tables": len(sec.tables) > 0,
-                "function_types": [fs.section_type for fs in sec.function_sections],
+                "id": sec['id'],
+                "title": sec['title'],
+                "level": sec['level'],
+                "parts": parts
             })
-
-        sections_content = []
-        for sec in parsed_data.sections:
-            sections_content.append({
-                "index": len(sections_content),
-                "title": sec.title,
-                "content": sec.content,
-                "tables": [_table_to_dict(t) for t in sec.tables],
-                "function_sections": [
-                    {
-                        "section_type": fs.section_type,
-                        "content": fs.content,
-                    }
-                    for fs in sec.function_sections
-                ],
-            })
-
-        sessions[session_id] = {
-            "status": "uploaded",
-            "progress": "文件已上传",
-            "file_path": file_path,
-            "file_name": file.filename,
-            "parsed_data": parsed_data,
-            "result": None,
-            "config": None,
-            "aggregated_analysis": None,
-            "approval_feedback": None,
-            "message": "",
-            "toc": toc,
-            "sections_content": sections_content,
-            "selected_sections": [],
-        }
 
         return {
-            "session_id": session_id,
+            "doc_id": doc_id,
             "file_name": file.filename,
             "status": "uploaded",
-            "toc": toc,
-            "total_sections": len(toc),
+            "toc": toc
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
+        print(traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail=f"文档解析失败: {str(e)}"
         )
 
 
-def _table_to_dict(table) -> dict:
-    return {
-        "headers": table.headers,
-        "rows": table.rows,
-        "caption": table.caption,
-    }
+@app.get("/api/document/{doc_id}")
+def get_document(doc_id: str):
+    doc = db_manager.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    return doc
 
 
-@app.get("/api/document-preview/{session_id}")
-def get_document_preview(session_id: str):
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="会话不存在")
-    session = sessions[session_id]
-    return {
-        "session_id": session_id,
-        "file_name": session["file_name"],
-        "toc": session.get("toc", []),
-        "sections_content": session.get("sections_content", []),
-    }
+@app.post("/api/create-task")
+def create_task(doc_id: str = Query(...)):
+    """为文档创建一个新的分析任务"""
+    task_id = db_manager.create_analysis_task(doc_id, [])
+    return {"task_id": task_id}
 
 
 @app.post("/api/start-analysis")
 def start_analysis(input_data: StartAnalysisInput):
-    session_id = input_data.session_id
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    task_id = input_data.task_id
+    part_ids = input_data.selected_part_ids
+    
+    if not part_ids:
+        raise HTTPException(status_code=400, detail="请选择至少一个需求片段进行分析")
 
-    session = sessions[session_id]
-    if session["status"] not in ("uploaded", "error"):
-        raise HTTPException(status_code=400, detail=f"当前状态不允许启动分析: {session['status']}")
+    # 获取第一个片段的信息来确定文档路径
+    first_part = db_manager.get_function_part(part_ids[0])
+    if not first_part:
+        raise HTTPException(status_code=404, detail="需求片段不存在")
+    
+    doc_id = first_part["doc_id"]
+    file_path = first_part["file_path"]
 
-    session["selected_sections"] = input_data.selected_sections or []
-    session["status"] = "starting"
-    session["progress"] = "正在启动分析..."
-    session["message"] = ""
-
+    # 启动后台线程执行分析
     thread = threading.Thread(
         target=run_analysis_in_thread,
-        args=(session_id, session["file_path"]),
-        kwargs={
-            "selected_indices": input_data.selected_sections,
-            "parsed_data": session.get("parsed_data")
-        },
+        args=(task_id, doc_id, file_path, part_ids),
         daemon=True,
     )
     thread.start()
 
-    return {"session_id": session_id, "status": "started"}
+    return {"task_id": task_id, "status": "started"}
 
 
-@app.get("/api/analysis-status/{session_id}")
-def get_analysis_status(session_id: str):
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="会话不存在")
-
-    session = sessions[session_id]
-    return {
-        "session_id": session_id,
-        "status": session["status"],
-        "progress": session["progress"],
-        "message": session["message"],
-        "has_result": session["result"] is not None,
-        "has_aggregated": session["aggregated_analysis"] is not None,
-    }
-
-
-@app.get("/api/analysis-result/{session_id}")
-def get_analysis_result(session_id: str):
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="会话不存在")
-
-    session = sessions[session_id]
-    return {
-        "session_id": session_id,
-        "status": session["status"],
-        "result": session.get("result"),
-        "aggregated_analysis": session.get("aggregated_analysis"),
-        "approval_feedback": session.get("approval_feedback"),
-    }
-
-
-@app.post("/api/submit-review")
-def submit_review(input_data: UserReviewInput):
-    session_id = input_data.session_id
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="会话不存在")
-
-    session = sessions[session_id]
-    if session["status"] != "awaiting_review":
-        raise HTTPException(status_code=400, detail=f"当前状态不允许审核: {session['status']}")
-
-    config = session.get("config")
-    if not config:
-        raise HTTPException(status_code=500, detail="未找到流程状态")
-
-    try:
-        result = resume_after_user_review(config, input_data.user_input)
-
-        session["status"] = "completed"
-        session["progress"] = "分析完成"
-        session["message"] = "审核完成，已生成最终结果"
-
-        if result:
-            session["result"] = _serialize_result(result)
-            aggregated = result.get("aggregated_analysis")
-            if aggregated:
-                session["aggregated_analysis"] = _to_dict(aggregated)
-
+@app.get("/api/task-status/{task_id}")
+def get_task_status(task_id: str):
+    # 优先从内存获取进度信息
+    if task_id in sessions:
+        return sessions[task_id]
+    
+    # 从数据库获取
+    task = db_manager.get_task(task_id)
+    if task:
         return {
-            "session_id": session_id,
-            "status": "completed",
-            "result": session.get("result"),
-            "aggregated_analysis": session.get("aggregated_analysis"),
+            "task_id": task_id,
+            "status": task["status"],
+            "progress": "已完成" if task["status"] == "completed" else "未在运行",
+            "message": task.get("error_message") or ""
         }
-    except Exception as e:
-        session["status"] = "error"
-        session["message"] = f"恢复流程失败: {str(e)}"
-        raise HTTPException(status_code=500, detail=str(e))
+
+    raise HTTPException(status_code=404, detail="任务不存在")
 
 
-@app.post("/api/stop-analysis/{session_id}")
-def stop_analysis(session_id: str):
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="会话不存在")
+@app.get("/api/task-results/{task_id}")
+def get_task_results(task_id: str):
+    """获取任务生成的测试点"""
+    results = db_manager.get_analysis_results(task_id)
+    # results 已经通过视图 v_task_test_points 关联了原文
+    return {
+        "task_id": task_id,
+        "test_points": results
+    }
+
+
+@app.post("/api/stop-analysis/{task_id}")
+def stop_analysis(task_id: str):
+    if task_id in sessions:
+        # 这里简单标记一下，实际 Graph 节点需要检查 state.is_cancelled
+        sessions[task_id]["is_cancelled"] = True
+        # 同时更新数据库
+        db_manager.update_task_status(task_id, "cancelled")
+        return {"status": "cancelling"}
     
-    session = sessions[session_id]
-    if session["status"] not in ("starting", "parsing", "awaiting_review"):
-        return {"status": session["status"], "message": "当前流程不在运行中"}
-
-    config = session.get("config")
-    if config:
-        try:
-            # 通过更新图状态来触发停止
-            langgraph_app.update_state(config, {"is_cancelled": True})
-            session["status"] = "stopped"
-            session["progress"] = "分析已手动停止"
-            session["message"] = "用户已停止分析任务"
-            return {"session_id": session_id, "status": "stopped"}
-        except Exception as e:
-            # 如果由于处于 interrupt 状态导致无法更新，则直接标记状态
-            session["status"] = "stopped"
-            return {"session_id": session_id, "status": "stopped", "warning": str(e)}
-    
-    session["status"] = "stopped"
-    return {"session_id": session_id, "status": "stopped"}
+    return {"status": "not_running"}
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# 移除旧的 review 接口，因为新流程不需要

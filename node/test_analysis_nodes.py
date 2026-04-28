@@ -2,58 +2,33 @@ import os
 import json
 import re
 import time
+import psycopg2.extras
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
-from langgraph.types import interrupt
 from pydantic import BaseModel
-from struct_output.output_list import (
-    TestPoint, ApprovalFeedback,
-    DocSectionWithMetadata, TableData,
-    UserReviewStatus,
-    AggregatedTestAnalysis, SourceFragmentWithPoints, AggregatedTestPoint,
-)
 from struct_output.test_analysis_schema import (
-    AnalysisResult, ReviewResult,
+    SinglePartAnalysisResult, SingleTestPointReviewResult, FormatReviewIssue
 )
 from prompt.test_analysis import (
     TABLE_ANALYSIS_PROMPT, FUNC_DESC_ANALYSIS_PROMPT,
     BUSINESS_RULE_ANALYSIS_PROMPT, EXCEPTION_ANALYSIS_PROMPT,
-    PROCESS_ANALYSIS_PROMPT, REVIEW_AGENT_PROMPT,
+    PROCESS_ANALYSIS_PROMPT, FORMAT_REVIEW_PROMPT
 )
 from state.state_list import DocState
-from typing import Dict, List, Tuple
-
-SECTION_TYPE_MAP = {
-    "功能描述": "func_desc",
-    "业务规则": "business_rule",
-    "操作权限": "business_rule",
-    "处理过程": "process",
-    "处理流程": "process",
-    "异常处理": "exception",
-}
+from typing import Dict, List, Any, Optional
+from db.database import db_manager
 
 GLM_API_KEY = os.environ["GLM_API_KEY"]
 GLM_BASE_URL = os.environ["GLM_BASE_URL"]
 GLM_MODEL = os.environ["GLM_MODEL"]
 
-
 def _get_llm(temperature: float = 0.3) -> ChatOpenAI:
-    """
-    初始化并返回一个 ChatOpenAI 实例。
-    
-    Args:
-        temperature: 生成随机性，默认为 0.3。
-        
-    Returns:
-        ChatOpenAI: 配置好的语言模型实例。
-    """
     return ChatOpenAI(
         model=GLM_MODEL,
         temperature=temperature,
         api_key=GLM_API_KEY,
         base_url=GLM_BASE_URL,
     )
-
 
 def _invoke_structured(llm: ChatOpenAI, prompt_text: str, output_cls) -> BaseModel:
     last_error = None
@@ -68,7 +43,6 @@ def _invoke_structured(llm: ChatOpenAI, prompt_text: str, output_cls) -> BaseMod
             content = re.sub(r'\s*```$', '', content)
             content = content.strip()
             data = json.loads(content)
-            data = _normalize_analysis_fields(data)
             return output_cls.model_validate(data)
         except Exception as e:
             last_error = e
@@ -77,570 +51,138 @@ def _invoke_structured(llm: ChatOpenAI, prompt_text: str, output_cls) -> BaseMod
                 continue
             raise last_error
 
+# --- 节点实现 ---
 
-def _normalize_analysis_fields(data: dict) -> dict:
-    FIELD_ALIASES = {
-        "id": "test_point_id",
-        "title": "description",
-        "summary": "description",
-        "type": "test_type",
-    }
-    DEFAULTS = {
-        "priority": "中",
-        "test_type": "功能测试",
-    }
-    if "test_points" in data and isinstance(data["test_points"], list):
-        for tp in data["test_points"]:
-            for old_key, new_key in FIELD_ALIASES.items():
-                if old_key in tp and new_key not in tp:
-                    tp[new_key] = tp.pop(old_key)
-            for key, default in DEFAULTS.items():
-                if key not in tp or not tp[key]:
-                    tp[key] = default
-    return data
-
-
-def _get_selected_sections(state: DocState) -> List[DocSectionWithMetadata]:
-    """
-    从状态中获取选中的文档章节。
+def fetch_next_part_node(state: DocState) -> Dict:
+    """获取下一个待处理的需求片段"""
+    if not state.get("pending_part_ids"):
+        return {"status": "completed", "current_part_id": None}
     
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        List[DocSectionWithMetadata]: 选中的章节列表。
-    """
-    sections = state.get("parsed_data")
-    if not sections:
-        print("[DEBUG _get_selected_sections] parsed_data 为空！")
-        return []
-    indices = state.get("selected_section_indices", [])
-    print(f"[DEBUG _get_selected_sections] parsed_data 有 {len(sections.sections)} 个章节, 选中 {len(indices)} 个索引: {indices}")
-    if not indices:
-        return sections.sections
-    result = [sections.sections[i] for i in indices if i < len(sections.sections)]
-    print(f"[DEBUG _get_selected_sections] 筛选后返回 {len(result)} 个章节")
-    return result
-
-
-def _collect_table_data(sections: List[DocSectionWithMetadata]) -> List[Tuple[str, TableData]]:
-    """
-    从给定的章节列表中收集所有表格数据。
+    pending_ids = state["pending_part_ids"].copy()
+    next_id = pending_ids.pop(0)
     
-    Args:
-        sections: 章节列表。
-        
-    Returns:
-        List[Tuple[str, TableData]]: 包含章节标题和表格数据的元组列表。
-    """
-    tables = []
-    for sec in sections:
-        for t in sec.tables:
-            tables.append((sec.title, t))
-        for fs in sec.function_sections:
-            for t in fs.tables:
-                tables.append((f"{sec.title} - {fs.section_type}", t))
-    return tables
-
-
-def _collect_function_sections(sections: List[DocSectionWithMetadata], section_type: str) -> List[Tuple[str, str, str]]:
-    """
-    从给定的章节列表中收集特定类型的子章节内容。
+    part_data = db_manager.get_function_part(next_id)
+    if not part_data:
+        return {"pending_part_ids": pending_ids, "status": "error", "message": f"找不到片段 ID: {next_id}"}
     
-    Args:
-        sections: 章节列表。
-        section_type: 目标子章节类型。
-        
-    Returns:
-        List[Tuple[str, str, str]]: 包含主章节标题、子章节类型和内容的元组列表。
-    """
-    results = []
-    for sec in sections:
-        for fs in sec.function_sections:
-            mapped = SECTION_TYPE_MAP.get(fs.section_type, "")
-            if mapped == section_type:
-                results.append((sec.title, fs.section_type, fs.content))
-    return results
-
-
-def _format_table_data(tables: List[Tuple[str, TableData]]) -> str:
-    """
-    将表格数据格式化为字符串，用于提示词输入。
-    
-    Args:
-        tables: 包含章节标题和表格数据的元组列表。
-        
-    Returns:
-        str: 格式化后的表格字符串。
-    """
-    lines = []
-    for i, (section_title, table) in enumerate(tables, 1):
-        lines.append(f"\n【表格{i}】来源章节: {section_title}")
-        lines.append(f"列标题: {', '.join(table.headers)}")
-        for j, row in enumerate(table.rows, 1):
-            lines.append(f"  行{j}: {', '.join(row)}")
-    return "\n".join(lines)
-
-
-def _format_section_content(items: List[Tuple[str, str, str]], max_len: int = 500) -> str:
-    """
-    将章节内容格式化为字符串，用于提示词输入。
-    
-    Args:
-        items: 包含标题、类型和内容的元组列表。
-        max_len: 每个章节内容的最大长度。
-        
-    Returns:
-        str: 格式化后的内容字符串。
-    """
-    lines = []
-    for section_title, stype, content in items:
-        lines.append(f"\n【{section_title} - {stype}】\n{content[:max_len]}")
-    return "\n".join(lines)
-
-
-
-
-def _build_aggregated_analysis(
-    result,
-    source_type: str,
-    section_title: str,
-) -> AggregatedTestAnalysis:
-    """
-    将原始分析结果构建为聚合的测试点分析对象。
-    
-    Args:
-        result: 原始分析结果对象（包含测试点和来源片段）。
-        source_type: 来源类型（如“表格”、“功能描述”等）。
-        section_title: 章节标题。
-        
-    Returns:
-        AggregatedTestAnalysis: 聚合后的分析结果。
-    """
-    fragments_map = {}
-    for sf in result.source_fragments:
-        fragments_map[sf.index] = SourceFragmentWithPoints(
-            index=sf.index,
-            section_title=sf.section_title,
-            content=sf.content,
-            test_points=[],
-        )
-
-    for tp in result.test_points:
-        agg_tp = AggregatedTestPoint(
-            test_point_id=tp.test_point_id,
-            description=tp.description,
-            source_fragment_index=tp.source_fragment_index,
-            priority=tp.priority,
-            test_type=tp.test_type,
-            source_type=source_type,
-            steps=getattr(tp, 'steps', []),
-            expected_results=getattr(tp, 'expected_results', []),
-        )
-        if tp.source_fragment_index in fragments_map:
-            fragments_map[tp.source_fragment_index].test_points.append(agg_tp)
-
-    fragments = sorted(fragments_map.values(), key=lambda f: f.index)
-    return AggregatedTestAnalysis(
-        fragments=fragments,
-        total_test_points=len(result.test_points),
-        total_fragments=len(fragments),
-        coverage_analysis=result.coverage_analysis,
-    )
-
-
-def _merge_aggregated_analyses(analyses: List[AggregatedTestAnalysis]) -> AggregatedTestAnalysis:
-    """
-    将多个聚合分析结果合并为一个。
-    
-    Args:
-        analyses: 聚合分析结果列表。
-        
-    Returns:
-        AggregatedTestAnalysis: 合并后的聚合分析结果。
-    """
-    all_fragments = []
-    seen_indices = set()
-    total_points = 0
-
-    for analysis in analyses:
-        if not analysis:
-            continue
-        total_points += analysis.total_test_points
-        for frag in analysis.fragments:
-            if frag.index not in seen_indices:
-                seen_indices.add(frag.index)
-                all_fragments.append(frag)
-            else:
-                existing = next(f for f in all_fragments if f.index == frag.index)
-                existing.test_points.extend(frag.test_points)
-
-    all_fragments.sort(key=lambda f: f.index)
-    return AggregatedTestAnalysis(
-        fragments=all_fragments,
-        total_test_points=total_points,
-        total_fragments=len(all_fragments),
-        coverage_analysis=f"共 {len(all_fragments)} 个原文片段，{total_points} 个测试点",
-    )
-
-
-def _run_analysis_node(
-    state: DocState,
-    source_type: str,
-    prompt_template: str,
-    output_cls,
-    collect_fn,
-    format_fn,
-    state_key: str,
-) -> Dict:
-    """
-    通用的分析节点执行逻辑。
-    
-    Args:
-        state: 当前图的状态。
-        source_type: 来源类型。
-        prompt_template: 提示词模板。
-        output_cls: 输出的结构化类。
-        collect_fn: 数据收集函数。
-        format_fn: 格式化参数名。
-        state_key: 状态中存储结果的键。
-        
-    Returns:
-        Dict: 更新后的状态片段。
-    """
-    sections = _get_selected_sections(state)
-    if not sections:
-        print(f"[DEBUG _run_analysis_node] {source_type}: 无选中章节，返回 None")
-        return {state_key: None}
-
-    items = collect_fn(sections)
-    print(f"[DEBUG _run_analysis_node] {source_type}: 收集到 {len(items)} 个条目")
-    if not items:
-        print(f"[DEBUG _run_analysis_node] {source_type}: 无条目，返回 None")
-        return {state_key: None}
-
-    prompt = PromptTemplate.from_template(prompt_template)
-    prompt_text = prompt.format(**{format_fn: _format_section_content(items)})
-
-    try:
-        result = _invoke_structured(_get_llm(0.3), prompt_text, output_cls)
-        aggregated = _build_aggregated_analysis(result, source_type, f"{source_type}分析")
-        return {state_key: aggregated}
-    except Exception as e:
-        print(f"{source_type}测试点分析失败: {e}")
-        return {state_key: None}
-
-
-def analysis_coordinator_node(state: DocState) -> Dict:
-    analyses_objects = []
-    individual_results = {}
-
-    for idx, (node_fn, state_key) in enumerate([
-        (table_analysis_node, "table_aggregated"),
-        (func_desc_analysis_node, "func_desc_aggregated"),
-        (business_rule_analysis_node, "business_rule_aggregated"),
-        (exception_analysis_node, "exception_aggregated"),
-        (process_analysis_node, "process_aggregated"),
-    ]):
-        if idx > 0:
-            time.sleep(1)
-        ret = node_fn(state)
-        val = ret.get(state_key)
-        individual_results[state_key] = val.model_dump() if (val is not None and hasattr(val, "model_dump")) else None
-        print(f"[DEBUG] {state_key}: {'有数据' if val is not None else '无数据'}")
-        if val is not None:
-            analyses_objects.append(val)
-
-    print(f"[DEBUG] 共 {len(analyses_objects)} 个子分析有数据")
-    if not analyses_objects:
-        print("[DEBUG] >>> 所有子分析均无数据，aggregated_analysis = None")
-        return {
-            "aggregated_analysis": None,
-            "approval_feedback": None,
-            "user_review": None,
-            "is_approved": False,
-            **individual_results,
-        }
-
-    merged = _merge_aggregated_analyses(analyses_objects)
-    print(f"[DEBUG] merged.total_test_points={merged.total_test_points}, total_fragments={merged.total_fragments}")
     return {
-        "aggregated_analysis": merged.model_dump(),
-        "approval_feedback": None,
-        "user_review": None,
-        "is_approved": False,
-        **individual_results,
+        "current_part_id": next_id,
+        "current_part_content": part_data["content"],
+        "current_part_type": part_data["section_type"],
+        "pending_part_ids": pending_ids,
+        "status": "analyzing",
+        "progress": f"正在分析: {part_data.get('section_title', '未命名章节')}"
     }
 
-
-def table_analysis_node(state: DocState) -> Dict:
-    """
-    表格分析节点，专门处理文档中的表格测试点。
+def analysis_node(state: DocState) -> Dict:
+    """通用分析节点，根据类型调用不同的提示词"""
+    part_type = state.get("current_part_type")
+    content = state.get("current_part_content")
+    task_id = state.get("task_id")
+    part_id = state.get("current_part_id")
     
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        Dict: 包含表格聚合分析结果的字典。
-    """
-    sections = _get_selected_sections(state)
-    if not sections:
-        print("[DEBUG table_analysis_node] 无选中章节，返回 None")
-        return {"table_aggregated": None}
+    if not part_id or not content:
+        return {"status": "error", "message": "缺失分析内容"}
 
-    tables = _collect_table_data(sections)
-    print(f"[DEBUG table_analysis_node] 收集到 {len(tables)} 个表格")
-    if not tables:
-        print("[DEBUG table_analysis_node] 无表格数据，返回 None")
-        return {"table_aggregated": None}
-
-    prompt = PromptTemplate.from_template(TABLE_ANALYSIS_PROMPT)
-    prompt_text = prompt.format(table_data=_format_table_data(tables))
-
-    try:
-        result = _invoke_structured(_get_llm(0.3), prompt_text, AnalysisResult)
-        aggregated = _build_aggregated_analysis(result, "表格", "表格分析")
-        return {"table_aggregated": aggregated}
-    except Exception as e:
-        print(f"表格测试点分析失败: {e}")
-        return {"table_aggregated": None}
-
-
-def func_desc_analysis_node(state: DocState) -> Dict:
-    """
-    功能描述分析节点。
+    # 映射提示词模板
+    prompt_map = {
+        "表格": TABLE_ANALYSIS_PROMPT,
+        "功能描述": FUNC_DESC_ANALYSIS_PROMPT,
+        "业务规则": BUSINESS_RULE_ANALYSIS_PROMPT,
+        "操作权限": BUSINESS_RULE_ANALYSIS_PROMPT,
+        "处理过程": PROCESS_ANALYSIS_PROMPT,
+        "处理流程": PROCESS_ANALYSIS_PROMPT,
+        "异常处理": EXCEPTION_ANALYSIS_PROMPT,
+    }
     
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        Dict: 包含功能描述聚合分析结果的字典。
-    """
-    return _run_analysis_node(
-        state, "功能描述", FUNC_DESC_ANALYSIS_PROMPT,
-        AnalysisResult,
-        lambda s: _collect_function_sections(s, "func_desc"),
-        "func_desc_content",
-        "func_desc_aggregated",
-    )
-
-
-def business_rule_analysis_node(state: DocState) -> Dict:
-    """
-    业务规则分析节点。
+    template = prompt_map.get(part_type, FUNC_DESC_ANALYSIS_PROMPT)
+    prompt = PromptTemplate.from_template(template)
     
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        Dict: 包含业务规则聚合分析结果的字典。
-    """
-    return _run_analysis_node(
-        state, "业务规则", BUSINESS_RULE_ANALYSIS_PROMPT,
-        AnalysisResult,
-        lambda s: _collect_function_sections(s, "business_rule"),
-        "business_rule_content",
-        "business_rule_aggregated",
-    )
-
-
-def exception_analysis_node(state: DocState) -> Dict:
-    """
-    异常处理分析节点。
-    
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        Dict: 包含异常处理聚合分析结果的字典。
-    """
-    return _run_analysis_node(
-        state, "异常处理", EXCEPTION_ANALYSIS_PROMPT,
-        AnalysisResult,
-        lambda s: _collect_function_sections(s, "exception"),
-        "exception_content",
-        "exception_aggregated",
-    )
-
-
-def process_analysis_node(state: DocState) -> Dict:
-    """
-    处理流程分析节点。
-    
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        Dict: 包含处理流程聚合分析结果的字典。
-    """
-    return _run_analysis_node(
-        state, "处理流程", PROCESS_ANALYSIS_PROMPT,
-        AnalysisResult,
-        lambda s: _collect_function_sections(s, "process"),
-        "process_content",
-        "process_aggregated",
-    )
-
-
-def merge_aggregated_analysis_node(state: DocState) -> Dict:
-    """
-    聚合所有分析节点的输出。
-    
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        Dict: 包含最终聚合分析结果的字典。
-    """
-    analyses = [
-        state.get("table_aggregated"),
-        state.get("func_desc_aggregated"),
-        state.get("business_rule_aggregated"),
-        state.get("exception_aggregated"),
-        state.get("process_aggregated"),
-    ]
-    valid = [a for a in analyses if a is not None]
-    if not valid:
-        return {"aggregated_analysis": None}
-
-    valid_objects = [AggregatedTestAnalysis.model_validate(a) if isinstance(a, dict) else a for a in valid]
-    merged = _merge_aggregated_analyses(valid_objects)
-    return {"aggregated_analysis": merged.model_dump()}
-
-
-def review_agent_node(state: DocState) -> Dict:
-    """
-    审核 Agent 节点，利用 AI 对聚合后的测试点进行反思和评分。
-    
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        Dict: 包含审核反馈和是否批准的状态。
-    """
-    aggregated = state.get("aggregated_analysis")
-    print(f"[DEBUG review_agent_node] aggregated_analysis 类型: {type(aggregated).__name__}, 值: {type(aggregated) == dict and 'dict keys: '+str(list(aggregated.keys())[:3]) or '不是dict'}")
-    if not aggregated:
-        print("[DEBUG review_agent_node] aggregated_analysis 为空，跳过审核")
-        return {"approval_feedback": None, "is_approved": False}
-
-    # 支持字典格式和 Pydantic 模型格式
-    fragments = aggregated.get("fragments") if isinstance(aggregated, dict) else getattr(aggregated, "fragments", None)
-    if not fragments:
-        return {"approval_feedback": None, "is_approved": False}
-
-    total_fragments = aggregated.get("total_fragments") if isinstance(aggregated, dict) else getattr(aggregated, "total_fragments", 0)
-    total_test_points = aggregated.get("total_test_points") if isinstance(aggregated, dict) else getattr(aggregated, "total_test_points", 0)
-
-    categories_text = ""
-    for frag in fragments:
-        frag_test_points = frag.get("test_points") if isinstance(frag, dict) else getattr(frag, "test_points", [])
-        frag_section_title = frag.get("section_title") if isinstance(frag, dict) else getattr(frag, "section_title", "")
-        categories_text += f"\n【{frag_section_title}】共 {len(frag_test_points)} 个测试点"
-        for tp in frag_test_points:
-            tp_id = tp.get("test_point_id") if isinstance(tp, dict) else getattr(tp, "test_point_id", "")
-            tp_desc = tp.get("description") if isinstance(tp, dict) else getattr(tp, "description", "")
-            tp_priority = tp.get("priority") if isinstance(tp, dict) else getattr(tp, "priority", "")
-            tp_type = tp.get("test_type") if isinstance(tp, dict) else getattr(tp, "test_type", "")
-            categories_text += f"\n  - {tp_id}: {tp_desc} (优先级: {tp_priority}, 类型: {tp_type})"
-
-    prompt = PromptTemplate.from_template(REVIEW_AGENT_PROMPT)
-    prompt_text = prompt.format(
-        category_count=total_fragments,
-        total_test_points=total_test_points,
-        categories_text=categories_text,
-    )
-
-    try:
-        result = _invoke_structured(_get_llm(0.2), prompt_text, ReviewResult)
-        feedback = ApprovalFeedback(
-            is_approved=result.is_approved,
-            completeness_score=result.completeness_score,
-            accuracy_score=result.accuracy_score,
-            issues=result.issues,
-            suggestions=result.suggestions,
-            missing_test_points=result.missing_test_points,
-        )
-        return {"approval_feedback": feedback.model_dump(), "is_approved": feedback.is_approved}
-    except Exception as e:
-        print(f"审核Agent反思失败: {e}")
-        return {"approval_feedback": None, "is_approved": False}
-
-
-def user_review_node(state: DocState) -> Dict:
-    aggregated = state.get("aggregated_analysis")
-
-    total_fragments = 0
-    total_test_points = 0
-    if aggregated:
-        total_fragments = aggregated.get("total_fragments") if isinstance(aggregated, dict) else getattr(aggregated, "total_fragments", 0)
-        total_test_points = aggregated.get("total_test_points") if isinstance(aggregated, dict) else getattr(aggregated, "total_test_points", 0)
-
-    user_input = interrupt(
-        {
-            "question": "请审核以下测试点分析结果",
-            "total_fragments": total_fragments,
-            "total_test_points": total_test_points,
-            "instruction": "输入 'y' 或 'yes' 或 '批准' 表示通过；输入其他内容将作为修改意见重新分析",
-        }
-    )
-
-    return process_user_review(state, user_input)
-
-
-def process_user_review(state: DocState, user_input: str) -> Dict:
-    """
-    处理用户输入的审核意见。
-    
-    Args:
-        state: 当前图的状态。
-        user_input: 用户的输入文本。
-        
-    Returns:
-        Dict: 包含用户审核状态的字典。
-    """
-    user_input = user_input.strip().lower()
-    if user_input in ("y", "yes", "批准", "通过"):
-        return {
-            "user_review": UserReviewStatus(reviewed=True, approved=True, review_comments="用户已批准", modifications=[]),
-            "user_interrupted": False,
-            "is_approved": True,
-        }
+    # 根据模板参数进行格式化
+    # 这里的参数名需要根据 prompt/test_analysis.py 中的实际定义来调整
+    # 假设通用的参数名为 content 或具体类型名
+    format_params = {}
+    if "table_data" in template:
+        format_params["table_data"] = content
+    elif "func_desc_content" in template:
+        format_params["func_desc_content"] = content
+    elif "business_rule_content" in template:
+        format_params["business_rule_content"] = content
+    elif "exception_content" in template:
+        format_params["exception_content"] = content
+    elif "process_content" in template:
+        format_params["process_content"] = content
     else:
-        return {
-            "user_review": UserReviewStatus(reviewed=True, approved=False, review_comments=user_input, modifications=[user_input]),
-            "user_interrupted": False,
-            "is_approved": False,
-        }
+        # 兜底
+        format_params = {"content": content}
 
-
-def should_continue_after_user_review(state: DocState) -> str:
-    """
-    用户审核后的决策边，决定是进入下一步还是重新分析。
-    
-    Args:
-        state: 当前图的状态。
+    try:
+        prompt_text = prompt.format(**format_params)
+        result = _invoke_structured(_get_llm(0.3), prompt_text, SinglePartAnalysisResult)
         
-    Returns:
-        str: 下一步的路由标识。
-    """
-    user_review = state.get("user_review")
-    if user_review and user_review.approved:
-        return "approved"
-    return "needs_revision"
+        # 保存结果到数据库
+        saved_tp_ids = []
+        for tp in result.test_points:
+            tp_id = db_manager.save_test_point(task_id, part_id, tp)
+            saved_tp_ids.append(tp_id)
+            
+        return {"last_saved_tp_ids": saved_tp_ids}
+    except Exception as e:
+        print(f"分析失败: {e}")
+        return {"status": "error", "message": f"分析失败: {str(e)}"}
 
-
-def test_case_generation_node(state: DocState) -> Dict:
-    """
-    用例文档生成节点。
-    目前为占位实现，后续将根据审核通过的测试点生成完整的测试用例文档。
+def format_review_node(state: DocState) -> Dict:
+    """格式审查节点"""
+    task_id = state.get("task_id")
+    tp_ids = state.get("last_saved_tp_ids", [])
     
-    Args:
-        state: 当前图的状态。
+    if not tp_ids:
+        return {}
+
+    llm = _get_llm(0.1) # 审查建议使用低温度
+    prompt_tpl = PromptTemplate.from_template(FORMAT_REVIEW_PROMPT)
+    
+    all_issues = []
+    
+    # 批量查询刚刚保存的测试点数据进行审查
+    # 为了简化，这里直接针对每个 tp_id 进行 LLM 审查
+    # 实际项目中可能需要更高效的批量审查方式
+    for tp_id in tp_ids:
+        # 获取测试点完整数据 (可以从 DB 查，或者在 analysis_node 中传递)
+        # 这里为了演示，假设我们有一个简单的查询方法
+        conn = db_manager.get_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM test_points WHERE id = %s", (tp_id,))
+        tp_data = cur.fetchone()
+        cur.close()
+        conn.close()
         
-    Returns:
-        Dict: 包含生成结果的状态片段。
-    """
-    # TODO: 实现具体的用例文档生成逻辑
-    print("正在生成用例文档...")
-    return {"message": "用例文档生成成功（占位）"}
+        if not tp_data:
+            continue
+            
+        prompt_text = prompt_tpl.format(test_point=json.dumps(tp_data, ensure_ascii=False))
+        
+        try:
+            review_result = _invoke_structured(llm, prompt_text, SingleTestPointReviewResult)
+            
+            # 更新 DB 中的审查状态
+            db_manager.update_test_point_format_status(
+                tp_id, 
+                review_result.is_valid, 
+                [issue.model_dump() for issue in review_result.issues]
+            )
+            
+            # 如果不合格，记录到 format_review_results 表
+            if not review_result.is_valid:
+                for issue in review_result.issues:
+                    db_manager.save_format_review(task_id, tp_id, issue.model_dump())
+                    all_issues.append({
+                        "test_point_id": tp_id,
+                        "field": issue.field,
+                        "issue": issue.issue,
+                        "suggestion": issue.suggestion
+                    })
+        except Exception as e:
+            print(f"格式审查失败 (TP: {tp_id}): {e}")
+            
+    return {"format_issues": state.get("format_issues", []) + all_issues}
