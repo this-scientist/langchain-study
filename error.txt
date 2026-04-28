@@ -1,0 +1,215 @@
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG table_analysis_node] 收集到 0 个表格
+[DEBUG table_analysis_node] 无表格数据，返回 None
+[DEBUG] table_aggregated: 无数据
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG _run_analysis_node] 功能描述: 收集到 1 个条目
+with_structured_output 调用失败，回退到手动解析: Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support this tool_choice', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+功能描述测试点分析失败: 33 validation errors for AnalysisResult
+test_points.0.description
+  Field required [type=missing, input_value={'summary': '验证正常...t_point_id': 'TP-F-001'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.0.priority
+  Field required [type=missing, input_value={'summary': '验证正常...t_point_id': 'TP-F-001'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.0.test_type
+  Field required [type=missing, input_value={'summary': '验证正常...t_point_id': 'TP-F-001'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.1.description
+  Field required [type=missing, input_value={'summary': '验证按分...t_point_id': 'TP-F-002'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.1.priority
+  Field required [type=missing, input_value={'summary': '验证按分...t_point_id': 'TP-F-002'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.1.test_type
+  Field required [type=missing, input_value={'summary': '验证按分...t_point_id': 'TP-F-002'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.2.description
+  Field required [type=missing, input_value={'summary': '验证按分...t_point_id': 'TP-F-003'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.2.priority
+  Field required [type=missing, input_value={'summary': '验证按分...t_point_id': 'TP-F-003'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.2.test_type
+  Field required [type=missing, input_value={'summary': '验证按分...t_point_id': 'TP-F-003'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.3.description
+  Field required [type=missing, input_value={'summary': '验证从列...t_point_id': 'TP-F-004'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.3.priority
+  Field required [type=missing, input_value={'summary': '验证从列...t_point_id': 'TP-F-004'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.3.test_type
+  Field required [type=missing, input_value={'summary': '验证从列...t_point_id': 'TP-F-004'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.4.description
+  Field required [type=missing, input_value={'summary': '验证从详...t_point_id': 'TP-F-005'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.4.priority
+  Field required [type=missing, input_value={'summary': '验证从详...t_point_id': 'TP-F-005'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.4.test_type
+  Field required [type=missing, input_value={'summary': '验证从详...t_point_id': 'TP-F-005'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.5.description
+  Field required [type=missing, input_value={'summary': '验证从使...t_point_id': 'TP-F-006'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.5.priority
+  Field required [type=missing, input_value={'summary': '验证从使...t_point_id': 'TP-F-006'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.5.test_type
+  Field required [type=missing, input_value={'summary': '验证从使...t_point_id': 'TP-F-006'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.6.description
+  Field required [type=missing, input_value={'summary': '验证未登...t_point_id': 'TP-F-007'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.6.priority
+  Field required [type=missing, input_value={'summary': '验证未登...t_point_id': 'TP-F-007'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.6.test_type
+  Field required [type=missing, input_value={'summary': '验证未登...t_point_id': 'TP-F-007'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.7.description
+  Field required [type=missing, input_value={'summary': '验证无权...t_point_id': 'TP-F-008'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.7.priority
+  Field required [type=missing, input_value={'summary': '验证无权...t_point_id': 'TP-F-008'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.7.test_type
+  Field required [type=missing, input_value={'summary': '验证无权...t_point_id': 'TP-F-008'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.8.description
+  Field required [type=missing, input_value={'summary': '验证应用...t_point_id': 'TP-F-009'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.8.priority
+  Field required [type=missing, input_value={'summary': '验证应用...t_point_id': 'TP-F-009'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.8.test_type
+  Field required [type=missing, input_value={'summary': '验证应用...t_point_id': 'TP-F-009'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.9.description
+  Field required [type=missing, input_value={'summary': '验证进入...t_point_id': 'TP-F-010'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.9.priority
+  Field required [type=missing, input_value={'summary': '验证进入...t_point_id': 'TP-F-010'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.9.test_type
+  Field required [type=missing, input_value={'summary': '验证进入...t_point_id': 'TP-F-010'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.10.description
+  Field required [type=missing, input_value={'summary': '验证网络...t_point_id': 'TP-F-011'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.10.priority
+  Field required [type=missing, input_value={'summary': '验证网络...t_point_id': 'TP-F-011'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+test_points.10.test_type
+  Field required [type=missing, input_value={'summary': '验证网络...t_point_id': 'TP-F-011'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+[DEBUG] func_desc_aggregated: 无数据
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG _run_analysis_node] 业务规则: 收集到 1 个条目
+with_structured_output 调用失败，回退到手动解析: Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support this tool_choice', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+业务规则测试点分析失败: Expecting value: line 1 column 1 (char 0)
+[DEBUG] business_rule_aggregated: 无数据
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG _run_analysis_node] 异常处理: 收集到 1 个条目
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+with_structured_output 调用失败，回退到手动解析: Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support this tool_choice', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+INFO:     127.0.0.1:62838 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63059 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+异常处理测试点分析失败: Expecting value: line 1 column 1 (char 0)
+[DEBUG] exception_aggregated: 无数据
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG _run_analysis_node] 处理流程: 收集到 1 个条目
+with_structured_output 调用失败，回退到手动解析: Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support this tool_choice', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+处理流程测试点分析失败: Expecting value: line 1 column 1 (char 0)
+[DEBUG] process_aggregated: 无数据
+[DEBUG] 共 0 个子分析有数据
+[DEBUG] >>> 所有子分析均无数据，aggregated_analysis = None
+[DEBUG review_agent_node] aggregated_analysis 类型: NoneType, 值: 不是dict
+[DEBUG review_agent_node] aggregated_analysis 为空，跳过审核
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG table_analysis_node] 收集到 0 个表格
+[DEBUG table_analysis_node] 无表格数据，返回 None
+[DEBUG] table_aggregated: 无数据
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG _run_analysis_node] 功能描述: 收集到 1 个条目
+with_structured_output 调用失败，回退到手动解析: Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support this tool_choice', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+INFO:     127.0.0.1:63268 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+功能描述测试点分析失败: Expecting value: line 1 column 1 (char 0)
+[DEBUG] func_desc_aggregated: 无数据
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG _run_analysis_node] 业务规则: 收集到 1 个条目
+with_structured_output 调用失败，回退到手动解析: Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support this tool_choice', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+业务规则测试点分析失败: Expecting value: line 1 column 1 (char 0)
+[DEBUG] business_rule_aggregated: 无数据
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG _run_analysis_node] 异常处理: 收集到 1 个条目
+with_structured_output 调用失败，回退到手动解析: Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support this tool_choice', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+INFO:     127.0.0.1:63404 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+异常处理测试点分析失败: Expecting value: line 1 column 1 (char 0)
+[DEBUG] exception_aggregated: 无数据
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG _run_analysis_node] 处理流程: 收集到 1 个条目
+with_structured_output 调用失败，回退到手动解析: Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support this tool_choice', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+INFO:     127.0.0.1:63541 - "GET /api/analysis-status/ffa977dc-e5fa-4cc0-b9c2-18dc109f5e43 HTTP/1.1" 200 OK
+处理流程测试点分析失败: Expecting value: line 1 column 1 (char 0)
+[DEBUG] process_aggregated: 无数据
+[DEBUG] 共 0 个子分析有数据
+[DEBUG] >>> 所有子分析均无数据，aggregated_analysis = None
+[DEBUG review_agent_node] aggregated_analysis 类型: NoneType, 值: 不是dict
+[DEBUG review_agent_node] aggregated_analysis 为空，跳过审核
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG table_analysis_node] 收集到 0 个表格
+[DEBUG table_analysis_node] 无表格数据，返回 None
+[DEBUG] table_aggregated: 无数据
+[DEBUG _get_selected_sections] parsed_data 有 54 个章节, 选中 1 个索引: [0]
+[DEBUG _get_selected_sections] 筛选后返回 1 个章节
+[DEBUG _run_analysis_node] 功能描述: 收集到 1 个条目
+with_structured_output 调用失败，回退到手动解析: Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support this tool_choice', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}

@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langgraph.types import interrupt
@@ -55,24 +56,48 @@ def _get_llm(temperature: float = 0.3) -> ChatOpenAI:
 
 
 def _invoke_structured(llm: ChatOpenAI, prompt_text: str, output_cls) -> BaseModel:
-    """
-    调用大语言模型并尝试将结果解析为结构化的 Pydantic 模型。
-    
-    Args:
-        llm: 语言模型实例。
-        prompt_text: 提示词文本。
-        output_cls: 期望输出的 Pydantic 类。
-        
-    Returns:
-        BaseModel: 解析后的结构化数据。
-    """
-    raw = llm.invoke(prompt_text)
-    content = raw.content.strip()
-    content = re.sub(r'^```(?:markdown|json|)\s*', '', content)
-    content = re.sub(r'\s*```$', '', content)
-    content = content.strip()
-    data = json.loads(content)
-    return output_cls.model_validate(data)
+    last_error = None
+    for attempt in range(3):
+        try:
+            raw = llm.invoke(prompt_text)
+            content = raw.content.strip() if raw.content else ""
+            if not content:
+                raise ValueError("LLM 返回空内容")
+
+            content = re.sub(r'^```(?:markdown|json|)\s*', '', content)
+            content = re.sub(r'\s*```$', '', content)
+            content = content.strip()
+            data = json.loads(content)
+            data = _normalize_analysis_fields(data)
+            return output_cls.model_validate(data)
+        except Exception as e:
+            last_error = e
+            if attempt < 2:
+                time.sleep(1 * (attempt + 1))
+                continue
+            raise last_error
+
+
+def _normalize_analysis_fields(data: dict) -> dict:
+    FIELD_ALIASES = {
+        "id": "test_point_id",
+        "title": "description",
+        "summary": "description",
+        "type": "test_type",
+    }
+    DEFAULTS = {
+        "priority": "中",
+        "test_type": "功能测试",
+    }
+    if "test_points" in data and isinstance(data["test_points"], list):
+        for tp in data["test_points"]:
+            for old_key, new_key in FIELD_ALIASES.items():
+                if old_key in tp and new_key not in tp:
+                    tp[new_key] = tp.pop(old_key)
+            for key, default in DEFAULTS.items():
+                if key not in tp or not tp[key]:
+                    tp[key] = default
+    return data
 
 
 def _get_selected_sections(state: DocState) -> List[DocSectionWithMetadata]:
@@ -86,12 +111,16 @@ def _get_selected_sections(state: DocState) -> List[DocSectionWithMetadata]:
         List[DocSectionWithMetadata]: 选中的章节列表。
     """
     sections = state.get("parsed_data")
-    if not sections or not sections.sections:
+    if not sections:
+        print("[DEBUG _get_selected_sections] parsed_data 为空！")
         return []
     indices = state.get("selected_section_indices", [])
+    print(f"[DEBUG _get_selected_sections] parsed_data 有 {len(sections.sections)} 个章节, 选中 {len(indices)} 个索引: {indices}")
     if not indices:
         return sections.sections
-    return [sections.sections[i] for i in indices if i < len(sections.sections)]
+    result = [sections.sections[i] for i in indices if i < len(sections.sections)]
+    print(f"[DEBUG _get_selected_sections] 筛选后返回 {len(result)} 个章节")
+    return result
 
 
 def _collect_table_data(sections: List[DocSectionWithMetadata]) -> List[Tuple[str, TableData]]:
@@ -281,10 +310,13 @@ def _run_analysis_node(
     """
     sections = _get_selected_sections(state)
     if not sections:
+        print(f"[DEBUG _run_analysis_node] {source_type}: 无选中章节，返回 None")
         return {state_key: None}
 
     items = collect_fn(sections)
+    print(f"[DEBUG _run_analysis_node] {source_type}: 收集到 {len(items)} 个条目")
     if not items:
+        print(f"[DEBUG _run_analysis_node] {source_type}: 无条目，返回 None")
         return {state_key: None}
 
     prompt = PromptTemplate.from_template(prompt_template)
@@ -300,41 +332,45 @@ def _run_analysis_node(
 
 
 def analysis_coordinator_node(state: DocState) -> Dict:
-    """
-    分析协调器节点，按顺序执行各个具体的分析节点。
-    
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        Dict: 包含所有分析结果的聚合字典。
-    """
-    if state.get("is_cancelled"):
-        print("分析已取消，停止执行。")
-        return {}
+    analyses_objects = []
+    individual_results = {}
 
-    # 获取当前已有的聚合结果（如果有的话）
-    result = {
-        "table_aggregated": state.get("table_aggregated"),
-        "func_desc_aggregated": state.get("func_desc_aggregated"),
-        "business_rule_aggregated": state.get("business_rule_aggregated"),
-        "exception_aggregated": state.get("exception_aggregated"),
-        "process_aggregated": state.get("process_aggregated"),
-    }
-    
-    # 依次运行每个子节点并更新 result
-    for node_fn, state_key in [
+    for idx, (node_fn, state_key) in enumerate([
         (table_analysis_node, "table_aggregated"),
         (func_desc_analysis_node, "func_desc_aggregated"),
         (business_rule_analysis_node, "business_rule_aggregated"),
         (exception_analysis_node, "exception_aggregated"),
         (process_analysis_node, "process_aggregated"),
-    ]:
+    ]):
+        if idx > 0:
+            time.sleep(1)
         ret = node_fn(state)
-        if ret.get(state_key) is not None:
-            result[state_key] = ret[state_key]
-            
-    return result
+        val = ret.get(state_key)
+        individual_results[state_key] = val.model_dump() if (val is not None and hasattr(val, "model_dump")) else None
+        print(f"[DEBUG] {state_key}: {'有数据' if val is not None else '无数据'}")
+        if val is not None:
+            analyses_objects.append(val)
+
+    print(f"[DEBUG] 共 {len(analyses_objects)} 个子分析有数据")
+    if not analyses_objects:
+        print("[DEBUG] >>> 所有子分析均无数据，aggregated_analysis = None")
+        return {
+            "aggregated_analysis": None,
+            "approval_feedback": None,
+            "user_review": None,
+            "is_approved": False,
+            **individual_results,
+        }
+
+    merged = _merge_aggregated_analyses(analyses_objects)
+    print(f"[DEBUG] merged.total_test_points={merged.total_test_points}, total_fragments={merged.total_fragments}")
+    return {
+        "aggregated_analysis": merged.model_dump(),
+        "approval_feedback": None,
+        "user_review": None,
+        "is_approved": False,
+        **individual_results,
+    }
 
 
 def table_analysis_node(state: DocState) -> Dict:
@@ -349,10 +385,13 @@ def table_analysis_node(state: DocState) -> Dict:
     """
     sections = _get_selected_sections(state)
     if not sections:
+        print("[DEBUG table_analysis_node] 无选中章节，返回 None")
         return {"table_aggregated": None}
 
     tables = _collect_table_data(sections)
+    print(f"[DEBUG table_analysis_node] 收集到 {len(tables)} 个表格")
     if not tables:
+        print("[DEBUG table_analysis_node] 无表格数据，返回 None")
         return {"table_aggregated": None}
 
     prompt = PromptTemplate.from_template(TABLE_ANALYSIS_PROMPT)
@@ -464,8 +503,9 @@ def merge_aggregated_analysis_node(state: DocState) -> Dict:
     if not valid:
         return {"aggregated_analysis": None}
 
-    merged = _merge_aggregated_analyses(valid)
-    return {"aggregated_analysis": merged}
+    valid_objects = [AggregatedTestAnalysis.model_validate(a) if isinstance(a, dict) else a for a in valid]
+    merged = _merge_aggregated_analyses(valid_objects)
+    return {"aggregated_analysis": merged.model_dump()}
 
 
 def review_agent_node(state: DocState) -> Dict:
@@ -479,19 +519,35 @@ def review_agent_node(state: DocState) -> Dict:
         Dict: 包含审核反馈和是否批准的状态。
     """
     aggregated = state.get("aggregated_analysis")
-    if not aggregated or not aggregated.fragments:
+    print(f"[DEBUG review_agent_node] aggregated_analysis 类型: {type(aggregated).__name__}, 值: {type(aggregated) == dict and 'dict keys: '+str(list(aggregated.keys())[:3]) or '不是dict'}")
+    if not aggregated:
+        print("[DEBUG review_agent_node] aggregated_analysis 为空，跳过审核")
         return {"approval_feedback": None, "is_approved": False}
 
+    # 支持字典格式和 Pydantic 模型格式
+    fragments = aggregated.get("fragments") if isinstance(aggregated, dict) else getattr(aggregated, "fragments", None)
+    if not fragments:
+        return {"approval_feedback": None, "is_approved": False}
+
+    total_fragments = aggregated.get("total_fragments") if isinstance(aggregated, dict) else getattr(aggregated, "total_fragments", 0)
+    total_test_points = aggregated.get("total_test_points") if isinstance(aggregated, dict) else getattr(aggregated, "total_test_points", 0)
+
     categories_text = ""
-    for frag in aggregated.fragments:
-        categories_text += f"\n【{frag.section_title}】共 {len(frag.test_points)} 个测试点"
-        for tp in frag.test_points:
-            categories_text += f"\n  - {tp.test_point_id}: {tp.description} (优先级: {tp.priority}, 类型: {tp.test_type})"
+    for frag in fragments:
+        frag_test_points = frag.get("test_points") if isinstance(frag, dict) else getattr(frag, "test_points", [])
+        frag_section_title = frag.get("section_title") if isinstance(frag, dict) else getattr(frag, "section_title", "")
+        categories_text += f"\n【{frag_section_title}】共 {len(frag_test_points)} 个测试点"
+        for tp in frag_test_points:
+            tp_id = tp.get("test_point_id") if isinstance(tp, dict) else getattr(tp, "test_point_id", "")
+            tp_desc = tp.get("description") if isinstance(tp, dict) else getattr(tp, "description", "")
+            tp_priority = tp.get("priority") if isinstance(tp, dict) else getattr(tp, "priority", "")
+            tp_type = tp.get("test_type") if isinstance(tp, dict) else getattr(tp, "test_type", "")
+            categories_text += f"\n  - {tp_id}: {tp_desc} (优先级: {tp_priority}, 类型: {tp_type})"
 
     prompt = PromptTemplate.from_template(REVIEW_AGENT_PROMPT)
     prompt_text = prompt.format(
-        category_count=aggregated.total_fragments,
-        total_test_points=aggregated.total_test_points,
+        category_count=total_fragments,
+        total_test_points=total_test_points,
         categories_text=categories_text,
     )
 
@@ -505,31 +561,26 @@ def review_agent_node(state: DocState) -> Dict:
             suggestions=result.suggestions,
             missing_test_points=result.missing_test_points,
         )
-        return {"approval_feedback": feedback, "is_approved": feedback.is_approved}
+        return {"approval_feedback": feedback.model_dump(), "is_approved": feedback.is_approved}
     except Exception as e:
         print(f"审核Agent反思失败: {e}")
         return {"approval_feedback": None, "is_approved": False}
 
 
 def user_review_node(state: DocState) -> Dict:
-    """
-    用户审核节点，暂停执行并等待人工确认。
-    
-    Args:
-        state: 当前图的状态。
-        
-    Returns:
-        Dict: 包含用户审核结果的字典。
-    """
     aggregated = state.get("aggregated_analysis")
-    if not aggregated:
-        return {"user_review": None, "user_interrupted": False}
+
+    total_fragments = 0
+    total_test_points = 0
+    if aggregated:
+        total_fragments = aggregated.get("total_fragments") if isinstance(aggregated, dict) else getattr(aggregated, "total_fragments", 0)
+        total_test_points = aggregated.get("total_test_points") if isinstance(aggregated, dict) else getattr(aggregated, "total_test_points", 0)
 
     user_input = interrupt(
         {
             "question": "请审核以下测试点分析结果",
-            "total_fragments": aggregated.total_fragments,
-            "total_test_points": aggregated.total_test_points,
+            "total_fragments": total_fragments,
+            "total_test_points": total_test_points,
             "instruction": "输入 'y' 或 'yes' 或 '批准' 表示通过；输入其他内容将作为修改意见重新分析",
         }
     )

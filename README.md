@@ -258,6 +258,376 @@ python3 backend/main.py
 open http://localhost:8000
 ```
 
+---
+
+## 修改记录：LangGraph State 传输一致性问题修复 (2026-04-28)
+
+### 背景
+
+LangGraph TypedDict state 中各节点返回的数据类型不一致——有的存 Pydantic 对象，有的存 dict，导致节点间取值时混用 `.属性` 和 `.get("key")` 两种访问方式，数据流脆弱不可靠。此外，迭代循环中旧状态残留导致下游节点读到过期数据。
+
+### 修改 #1 — 统一 State 存储格式为 dict
+
+**文件**: `node/test_analysis_nodes.py`  
+**位置**: `analysis_coordinator_node` 函数
+
+- **问题**: 子分析节点（`table_analysis_node` 等）返回 Pydantic `AggregatedTestAnalysis` 对象，`analysis_coordinator_node` 直接将这些对象存入 state，但 `aggregated_analysis` 又被 `model_dump()` 转成了 dict。同一个 state 中 dict 和对象混存。
+- **修复**: 
+  - 拆分为 `analyses_objects`（保留 Pydantic 对象供 `_merge_aggregated_analyses` 使用）和 `individual_results`（dict，供 state 存储）
+  - 所有子分析结果通过 `val.model_dump()` 统一转为 dict 再写入 state
+
+```python
+# 修改前
+individual_results[state_key] = val          # Pydantic 对象直接入 state
+analyses.append(val)                          # analyses 列表混用
+
+# 修改后
+individual_results[state_key] = val.model_dump() if (...) else None  # 统一为 dict
+analyses_objects.append(val)                  # 仅对象列表用于合并
+```
+
+---
+
+### 修改 #2 — 迭代循环清零旧状态
+
+**文件**: `node/test_analysis_nodes.py`  
+**位置**: `analysis_coordinator_node` 函数返回语句
+
+- **问题**: 当流程因用户驳回进入 `needs_revision` 重分析时，旧的 `approval_feedback`、`user_review`、`is_approved` 仍残留在 state 中，直到被 `review_agent`/`user_review` 覆盖。中间窗口期数据不一致。
+- **修复**: 每次 `analysis_coordinator_node` 返回时，显式清零三个字段：
+
+```python
+# 修改后（有数据分支 + 无数据分支均清零）
+return {
+    "aggregated_analysis": merged.model_dump(),
+    "approval_feedback": None,      # 新增：清零旧审核
+    "user_review": None,            # 新增：清零旧用户审核
+    "is_approved": False,           # 新增：重置为未批准
+    **individual_results,
+}
+```
+
+---
+
+### 修改 #3 — `create_final_result` 类型修复
+
+**文件**: `graph/test_analysis_workflow.py`  
+**位置**: `create_final_result` 函数
+
+- **问题**: `approval` 来自 state 为 dict 格式，但 `TestAnalysisWithApproval(approval=...)` 期望 `ApprovalFeedback` Pydantic 对象
+- **修复**: 增加 dict → Pydantic 对象转换：
+
+```python
+# 修改前
+final_result = TestAnalysisWithApproval(
+    analysis=merged_analysis,
+    approval=approval,                    # 直接传 dict，类型不匹配
+    ...
+)
+
+# 修改后
+approval_obj = ApprovalFeedback.model_validate(approval) if isinstance(approval, dict) else approval
+final_result = TestAnalysisWithApproval(
+    analysis=merged_analysis,
+    approval=approval_obj,                # 传 Pydantic 对象
+    ...
+)
+```
+
+- 同时将 `is_final` 的判断从 `(user_review and user_review.approved)` 改为 `getattr(user_review, "approved", False)`，防御性兼容 dict/Pydantic 对象。
+
+---
+
+### 修改 #4 — `merge_aggregated_analysis_node` 一致性修复
+
+**文件**: `node/test_analysis_nodes.py`  
+**位置**: `merge_aggregated_analysis_node` 函数
+
+- **问题**: 该节点从 state 取出的 `table_aggregated` 等字段现在是 dict，但 `_merge_aggregated_analyses` 需要 Pydantic 对象
+- **修复**: 在合并前将 dict 转回 Pydantic 对象，返回时再转为 dict：
+
+```python
+# 修改前
+merged = _merge_aggregated_analyses(valid)     # valid 里是 dict，merge 会失败
+return {"aggregated_analysis": merged}          # 返回 Pydantic 对象
+
+# 修改后
+valid_objects = [AggregatedTestAnalysis.model_validate(a) if isinstance(a, dict) else a for a in valid]
+merged = _merge_aggregated_analyses(valid_objects)
+return {"aggregated_analysis": merged.model_dump()}
+```
+
+---
+
+### 修改 #5 — `should_continue` 防御性属性访问
+
+**文件**: `graph/test_analysis_workflow.py`  
+**位置**: `should_continue` 函数
+
+- **问题**: `user_review.approved` 直接属性访问，若 state 中存储的是 dict 则会报 `AttributeError`
+- **修复**: 改用 `getattr(user_review, "approved", False)` 兼容 dict 和 Pydantic 对象
+
+---
+
+### 数据流一致性总览
+
+```
+analysis_coordinator → state: 全部 dict / None ✅
+      ↓
+review_agent        → state: approval_feedback(dict), is_approved(bool) ✅
+      ↓
+user_review         → state: user_review(UserReviewStatus), is_approved(bool) ✅
+      ↓
+should_continue     → 读取: getattr(user_review, "approved", False) ✅
+      ↓
+finalizer           → dict → Pydantic 对象 → TestAnalysisWithApproval ✅
+```
+
+---
+
+## 数据库设计方案 (v3.0)
+
+> **目标**：将文档解析结果、测试用例、格式审查、覆盖度审查全部持久化到数据库，替代原有的 LangGraph State 全量上下文传递，减小 Token 消耗并支持增量分析。
+
+### 设计原则
+
+| 原则 | 说明 |
+|------|------|
+| **State 瘦身** | Workflow state 只保留当前任务必要的轻量引用（task_id、document_id），不再携带全量数据 |
+| **DDD 分层存储** | 文档解析库、用例库、审查结果库各自独立，通过外键关联 |
+| **JSONB 存可变结构** | `steps`、`expected_results` 等可变数组用 JSONB，固定字段用列 |
+| **UUID 主键** | 所有主键由应用层生成（`uuid.uuid4()`），避免自增 ID 在分布式环境下的冲突 |
+| **软关联** | 测试点通过 `source_fragment_id` 关联原文片段，支持原文更新后测试点跟随 |
+| **独立数据库选型** | 使用 PostgreSQL 15+，利用 JSONB 索引和全文搜索能力 |
+
+### 新 Workflow 流程
+
+```
+[上传文档]
+    │
+    ▼
+[解析文档] ──► 写入 documents / document_sections / section_tables / section_function_parts
+    │              (SQL 第 1 部分)
+    ▼
+[用户选中章节] ──► 创建 analysis_tasks 记录，传入 selected_section_ids
+    │              (SQL 第 2 部分)
+    ▼
+[analysis_coordinator] ◄── 从 DB 读取选中章节（仅取该任务需要的行）
+    │   ├─ 5 个子分析节点分别调用 LLM
+    │   └─ 输出写入 aggregated_analyses / source_fragments / test_points
+    │              (SQL 第 3 部分)
+    ▼
+[格式审查 Agent] ──► 逐行检查 test_points
+    │   ├─ steps 与 expected_results 数量是否一致
+    │   ├─ test_type / priority 是否缺失 → 自动补充
+    │   └─ 更新 test_points.format_valid / format_issues / auto_filled_fields
+    │   └─ 汇总写入 format_review_results
+    │              (SQL 第 4 部分)
+    ▼
+[覆盖度审查 Agent] ──► 读取整个 document_sections + test_points
+    │   ├─ 对比：哪些章节无测试点覆盖？
+    │   ├─ 哪些功能分类 (func_desc/business_rule/exception/process) 覆盖不足？
+    │   ├─ 输出覆盖率评分 + 遗漏区域 + 建议补充的测试点
+    │   ├─ 写入 coverage_review_results
+    │   └─ 缺口详情写入 coverage_gaps
+    │              (SQL 第 5、6 部分)
+    ▼
+[完成] ✅
+```
+
+### 表结构总览
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      第 1 部分 · 文档解析库                           │
+│                                                                      │
+│  documents (文档)                                                     │
+│  ├── id, file_name, file_path, file_size, status,                   │
+│  │   total_sections, total_tables                                    │
+│  │                                                                   │
+│  └──► document_sections (章节)                                       │
+│        ├── id, document_id, section_index, title, level, content     │
+│        │   meta_level_1~4                                            │
+│        │                                                             │
+│        ├──► section_tables (表格)                                    │
+│        │     id, section_id, table_index, headers(JSONB), rows(JSONB)│
+│        │                                                             │
+│        └──► section_function_parts (功能分类)                         │
+│              id, section_id, part_index, section_type, content       │
+│              tables_json(JSONB)                                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                      第 2 部分 · 分析任务                             │
+│                                                                      │
+│  analysis_tasks                                                      │
+│  ├── id, document_id, status, selected_section_ids(JSONB)            │
+│  │   iteration_count, max_iterations                                 │
+│  │   error_message, created_at, completed_at                         │
+├─────────────────────────────────────────────────────────────────────┤
+│                      第 3 部分 · 测试用例库                           │
+│                                                                      │
+│  aggregated_analyses (按 source_type 拆分)                            │
+│  ├── id, task_id, source_type, total_test_points,                    │
+│  │   total_fragments, coverage_analysis                              │
+│  │                                                                   │
+│  ├──► source_fragments (原文片段)                                    │
+│  │     id, aggregated_analysis_id, fragment_index,                   │
+│  │     section_title, content                                        │
+│  │                                                                   │
+│  └──► test_points (核心用例表)                                       │
+│        id, task_id, source_fragment_id, test_point_id,               │
+│        description, source_section, source_type, source_content,     │
+│        priority, test_type,                                          │
+│        steps(JSONB), expected_results(JSONB),                        │
+│        format_valid, format_issues(JSONB), auto_filled_fields(JSONB) │
+├─────────────────────────────────────────────────────────────────────┤
+│                      第 4 部分 · 格式审查                             │
+│                                                                      │
+│  format_review_results                                               │
+│  ├── id, task_id, total_test_points, format_valid_count,             │
+│  │   format_invalid_count, auto_fixed_count,                         │
+│  │   issues_summary(JSONB), auto_fill_log(JSONB)                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                      第 5、6 部分 · 覆盖度审查                        │
+│                                                                      │
+│  coverage_review_results                                             │
+│  ├── id, task_id, completeness_score, accuracy_score,                │
+│  │   issues(JSONB), suggestions(JSONB), missing_test_points(JSONB),  │
+│  │   missing_areas(JSONB), coverage_analysis                         │
+│  │                                                                   │
+│  └──► coverage_gaps (缺口详情)                                       │
+│        id, review_id, task_id, gap_type, section_id,                 │
+│        description, suggested_test_points(JSONB)                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 关键字段映射（原 DocState → SQL）
+
+| 原 State 字段 | SQL 表.列 | 说明 |
+|---------------|-----------|------|
+| `parsed_data` | `documents` + `document_sections` + `section_tables` + `section_function_parts` | 拆分为 4 张表 |
+| `selected_section_indices` | `analysis_tasks.selected_section_ids` | 存章节 UUID 列表 |
+| `table_aggregated` | `aggregated_analyses` WHERE `source_type='table'` | 按 type 分存 |
+| `func_desc_aggregated` | `aggregated_analyses` WHERE `source_type='func_desc'` | 同上 |
+| `aggregated_analysis` | `test_points` (扁平化) | 不再存嵌套对象，直接存测试点行 |
+| `approval_feedback` | `coverage_review_results` | 审核改为覆盖度审查 |
+| `iteration_count` | `analysis_tasks.iteration_count` | |
+
+### 格式审查 Agent 逻辑
+
+```python
+# 伪代码
+def format_review_node(task_id: str):
+    test_points = db.query("SELECT * FROM test_points WHERE task_id = ?", task_id)
+
+    for tp in test_points:
+        issues = []
+        # 规则 1: steps 与 expected_results 数量一致
+        if len(tp.steps) != len(tp.expected_results):
+            issues.append({
+                "field": "steps/expected_results",
+                "issue": f"steps 有 {len(tp.steps)} 项, expected_results 有 {len(tp.expected_results)} 项, 数量不匹配"
+            })
+
+        # 规则 2: 缺失字段自动补充
+        auto_filled = {}
+        if not tp.priority or tp.priority not in ("高", "中", "低"):
+            auto_filled["priority"] = _infer_priority(tp.description)
+        if not tp.test_type:
+            auto_filled["test_type"] = _infer_test_type(tp.source_type, tp.description)
+
+        # 规则 3: test_point_id 格式校验 (TP-{SOURCE}-{NNN})
+        if not re.match(r"^TP-\w+-\d+$", tp.test_point_id):
+            issues.append({"field": "test_point_id", "issue": "ID 格式不符合规范"})
+
+        db.update("test_points", {
+            "format_valid": len(issues) == 0,
+            "format_issues": json.dumps(issues),
+            "auto_filled_fields": json.dumps(auto_filled),
+            **auto_filled
+        }, where={"id": tp.id})
+```
+
+### 覆盖度审查 Agent 逻辑
+
+```python
+# 伪代码
+def coverage_review_node(task_id: str):
+    # 1. 读取文档所有章节（仅取 ID + 标题 + 功能分类类型）
+    task = db.query("SELECT document_id FROM analysis_tasks WHERE id = ?", task_id)
+    all_sections = db.query("""
+        SELECT ds.id, ds.title, ds.meta_level_2, ds.meta_level_3,
+               sfp.section_type
+        FROM document_sections ds
+        LEFT JOIN section_function_parts sfp ON sfp.section_id = ds.id
+        WHERE ds.document_id = ?
+    """, task.document_id)
+
+    # 2. 读取所有已生成测试点
+    test_points = db.query("""
+        SELECT tp.test_point_id, tp.source_section, tp.source_type,
+               tp.priority, tp.description
+        FROM test_points tp
+        WHERE tp.task_id = ?
+    """, task_id)
+
+    # 3. 构造覆盖度审查 prompt
+    prompt = COVERAGE_REVIEW_PROMPT.format(
+        all_sections=json.dumps(all_sections),
+        test_points=json.dumps(test_points),
+        total_sections=len(all_sections),
+        total_test_points=len(test_points),
+    )
+
+    # 4. LLM 审查
+    result = llm.invoke(prompt)  # 输出 CoverageReviewResult
+
+    # 5. 写入结果
+    db.insert("coverage_review_results", {
+        "task_id": task_id,
+        "completeness_score": result.completeness_score,
+        "accuracy_score": result.accuracy_score,
+        "issues": json.dumps(result.issues),
+        "suggestions": json.dumps(result.suggestions),
+        "missing_test_points": json.dumps(result.missing_test_points),
+        "missing_areas": json.dumps(result.missing_areas),
+        "coverage_analysis": result.coverage_analysis,
+    })
+
+    # 6. 写入缺口详情
+    for gap in result.gaps:
+        db.insert("coverage_gaps", {
+            "review_id": review_id,
+            "task_id": task_id,
+            "gap_type": gap.gap_type,
+            "section_id": gap.section_id,
+            "description": gap.description,
+            "suggested_test_points": json.dumps(gap.suggested_test_points),
+        })
+```
+
+### SQL 文件位置
+
+完整 DDL 脚本位于 [`sql/schema.sql`](file:///Users/yyf/langchain-study/sql/schema.sql)，包含：
+- 10 张业务表 + 1 个触发器函数
+- 4 个索引（按文档查询、按任务查询、按类型查询、按格式状态查询）
+- 3 个便捷视图（文档概览、任务测试点汇总、覆盖度审查全貌）
+
+### New State (瘦身后)
+
+```python
+class DocStateV3(TypedDict):
+    task_id: str                       # analysis_tasks.id
+    document_id: str                   # documents.id
+    selected_section_ids: List[str]    # 用户选的章节 UUID 列表
+    iteration_count: int
+    max_iterations: int
+    status: str                        # running → format_reviewing → coverage_reviewing → completed
+    error_message: Optional[str]
+    is_cancelled: bool
+```
+
+---
+
 ## 环境变量
 
 | 变量名 | 说明 | 示例 |
@@ -265,6 +635,7 @@ open http://localhost:8000
 | `GLM_API_KEY` | 智谱 AI API Key | `xxx.CqRJwzvxkMCi1RWX` |
 | `GLM_BASE_URL` | 智谱 API 地址 | `https://open.bigmodel.cn/api/coding/paas/v4` |
 | `GLM_MODEL` | 模型名称 | `GLM-4.7-Flash` |
+| `DATABASE_URL` | PostgreSQL 连接串 | `postgresql://user:pass@localhost:5432/test_analysis` |
 | `LANGSMITH_TRACING` | LangSmith 追踪开关 | `true` |
 | `LANGSMITH_API_KEY` | LangSmith API Key | `lsv2_pt_xxx` |
 | `LANGSMITH_PROJECT` | LangSmith 项目名 | `langchaintest` |

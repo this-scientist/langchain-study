@@ -142,7 +142,10 @@
             </div>
             <div id="progressSection" class="hidden">
                 <div class="progress-bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
-                <div class="status-text" id="statusText">就绪</div>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 12px;">
+                    <div class="status-text" id="statusText">就绪</div>
+                    <button id="stopAnalysisBtn" style="display:none;padding:4px 12px;border:1px solid #e53935;border-radius:4px;background:#fff;color:#e53935;font-size:12px;cursor:pointer;font-weight:600;white-space:nowrap;">停止分析</button>
+                </div>
             </div>
             <div id="thinkingSection" class="thinking-section hidden">
                 <div class="thinking-header" id="thinkingToggle">
@@ -208,6 +211,7 @@
     var selectAllCheckbox = document.getElementById('selectAllCheckbox');
     var selectedCount = document.getElementById('selectedCount');
     var startAnalysisBtn = document.getElementById('startAnalysisBtn');
+    var stopAnalysisBtn = document.getElementById('stopAnalysisBtn');
     var progressSection = document.getElementById('progressSection');
     var progressFill = document.getElementById('progressFill');
     var statusText = document.getElementById('statusText');
@@ -271,6 +275,7 @@
         sectionCount.textContent = '0 个章节';
         startAnalysisBtn.disabled = true;
         progressSection.classList.add('hidden');
+        stopAnalysisBtn.style.display = 'none';
         thinkingSection.classList.add('hidden');
         contentArea.innerHTML = '<div class="empty-state"><div class="icon">📖</div><div>上传文档后，从左侧目录选择章节查看内容</div></div>';
         contentInfo.textContent = '请从左侧选择章节查看';
@@ -654,6 +659,35 @@
         testPointArea.innerHTML = html;
     }
 
+    stopAnalysisBtn.addEventListener('click', function() {
+        if (!sessionId) return;
+        stopAnalysisBtn.disabled = true;
+        stopAnalysisBtn.textContent = '正在停止...';
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/stop-analysis/' + encodeURIComponent(sessionId), true);
+        xhr.onload = function() {
+            stopAnalysisBtn.style.display = 'none';
+            stopAnalysisBtn.disabled = false;
+            stopAnalysisBtn.textContent = '停止';
+            if (xhr.status === 200) {
+                toast('分析已停止', 'info');
+                if (pollTimer) clearInterval(pollTimer);
+                pollTimer = null;
+                statusText.textContent = '分析已停止';
+                statusIndicator.textContent = '已停止';
+                startAnalysisBtn.disabled = false;
+            } else {
+                toast('停止失败', 'error');
+            }
+        };
+        xhr.onerror = function() {
+            stopAnalysisBtn.style.display = 'none';
+            stopAnalysisBtn.disabled = false;
+            stopAnalysisBtn.textContent = '停止';
+        };
+        xhr.send();
+    });
+
     startAnalysisBtn.addEventListener('click', function() {
         if (!sessionId || selectedSections.size === 0) return;
         startAnalysisBtn.disabled = true;
@@ -664,6 +698,7 @@
         progressFill.style.width = '0%';
         statusText.textContent = '正在启动分析...';
         statusIndicator.textContent = '分析中';
+        stopAnalysisBtn.style.display = 'inline-block';
         var selected = Array.from(selectedSections);
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/start-analysis', true);
@@ -675,6 +710,7 @@
             } else {
                 startAnalysisBtn.disabled = false;
                 progressSection.classList.add('hidden');
+                stopAnalysisBtn.style.display = 'none';
                 statusIndicator.textContent = '就绪';
                 var errMsg = '启动分析失败';
                 try { var err = JSON.parse(xhr.responseText); errMsg = err.detail || errMsg; } catch(e) {}
@@ -684,6 +720,7 @@
         xhr.onerror = function() {
             startAnalysisBtn.disabled = false;
             progressSection.classList.add('hidden');
+            stopAnalysisBtn.style.display = 'none';
             toast('网络错误', 'error');
         };
         xhr.send(JSON.stringify({ session_id: sessionId, selected_sections: selected }));
@@ -735,9 +772,11 @@
         progressFill.style.width = (pctMap[data.status] || 50) + '%';
         if (data.status === 'awaiting_review') {
             reviewSection.classList.remove('hidden');
+            stopAnalysisBtn.style.display = 'none';
             statusIndicator.textContent = '待审核';
         }
         if (data.status === 'error') {
+            stopAnalysisBtn.style.display = 'none';
             statusIndicator.textContent = '出错';
             startAnalysisBtn.disabled = false;
             toast(data.message || '分析出错', 'error');
@@ -757,6 +796,7 @@
                     progressFill.style.width = '100%';
                     statusText.textContent = '分析完成';
                     startAnalysisBtn.disabled = false;
+                    stopAnalysisBtn.style.display = 'none';
                     var total = aggregatedData ? aggregatedData.total_test_points || 0 : 0;
                     toast('分析完成，共生成 ' + total + ' 个测试点', 'success');
                     reviewSection.classList.add('hidden');
@@ -796,6 +836,7 @@
     function submitReview(userInput) {
         if (!sessionId) return;
         reviewSection.classList.add('hidden');
+        stopAnalysisBtn.style.display = 'none';
         statusIndicator.textContent = '提交审核中';
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/submit-review', true);

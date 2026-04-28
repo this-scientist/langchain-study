@@ -26,5 +26,24 @@ TABLE_ANALYSIS_PROMPT = """
 - 每个表格的每个列都要分析其可能的边界值和枚举值
 - 关注必填项、格式要求、取值范围
 - 测试点ID以 TP-T- 开头
-- 每个测试点必须包含 steps 和 expected_results 字段，steps 以数字序号开头（1. 2. 3. ...），每个步骤描述"操作入口动作、测试动作、测试观测动作"中的一种，expected_results 与 steps 一一对应，示例格式：steps=["1. 登录系统", "2. 进入功能页面", "3. 执行测试操作", "4. 观察结果"], expected_results=["1. 登录成功", "2. 页面正确加载", "3. 操作正常完成", "4. 结果符合预期"]
+- 每个测试点必须包含 steps 和 expected_results 字段，steps 以数字序号开头（1. 2. 3. ...），每个步骤描述"操作入口动作、测试动作、测试观测动作"中的一种，expected_results 与 steps 一一对应
+
+输出 JSON 字段名必须严格遵循以下示例（字段名不可更改）：
+{{
+  "source_fragments": [
+    {{"index": 0, "section_title": "章节标题", "content": "原文内容"}}
+  ],
+  "test_points": [
+    {{
+      "test_point_id": "TP-T-001",
+      "description": "验证...时，执行...操作，预期...结果",
+      "source_fragment_index": 0,
+      "priority": "高",
+      "test_type": "功能测试",
+      "steps": ["1. 登录系统", "2. 进入功能页面", "3. 执行测试操作"],
+      "expected_results": ["1. 登录成功", "2. 页面正确加载", "3. 操作正常完成"]
+    }}
+  ],
+  "coverage_analysis": "共X个测试点，覆盖了..."
+}}
 """

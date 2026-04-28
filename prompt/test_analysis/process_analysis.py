@@ -28,4 +28,23 @@ PROCESS_ANALYSIS_PROMPT = """
 - 关注步骤之间的依赖和顺序
 - 测试点ID以 TP-P- 开头
 - 每个测试点必须包含 steps 和 expected_results 字段，steps 以数字序号开头（1. 2. 3. ...），每个步骤描述"操作入口动作、测试动作、测试观测动作"中的一种，expected_results 与 steps 一一对应
+
+输出 JSON 字段名必须严格遵循以下示例（字段名不可更改）：
+{{
+  "source_fragments": [
+    {{"index": 0, "section_title": "章节标题", "content": "原文内容"}}
+  ],
+  "test_points": [
+    {{
+      "test_point_id": "TP-P-001",
+      "description": "验证...时，执行...操作，预期...结果",
+      "source_fragment_index": 0,
+      "priority": "高",
+      "test_type": "功能测试",
+      "steps": ["1. 登录系统", "2. 进入功能页面", "3. 执行测试操作"],
+      "expected_results": ["1. 登录成功", "2. 页面正确加载", "3. 操作正常完成"]
+    }}
+  ],
+  "coverage_analysis": "共X个测试点，覆盖了..."
+}}
 """
