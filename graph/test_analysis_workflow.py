@@ -5,6 +5,7 @@ from node.node_list import word_parser_node, word_indexer_node
 from node.test_analysis_nodes import (
     analysis_coordinator_node,
     review_agent_node,
+    user_review_node,
 )
 from struct_output.output_list import (
     TestAnalysisWithApproval,
@@ -69,8 +70,8 @@ def create_final_result(state: DocState) -> Dict:
     """
     aggregated = state.get("aggregated_analysis")
     approval = state.get("approval_feedback")
+    user_review = state.get("user_review")
     iteration_count = state.get("iteration_count", 0)
-    is_approved = state.get("is_approved", False)
 
     if aggregated and approval:
         from struct_output.output_list import TestPointAnalysis, TestPoint
@@ -113,6 +114,7 @@ def create_final_result(state: DocState) -> Dict:
         
         from struct_output.output_list import ApprovalFeedback
         approval_obj = ApprovalFeedback.model_validate(approval) if isinstance(approval, dict) else approval
+        is_approved = getattr(user_review, "approved", False) if user_review else False
 
         final_result = TestAnalysisWithApproval(
             analysis=merged_analysis,
@@ -146,17 +148,19 @@ workflow = StateGraph(DocState)
 workflow.add_node("increment_iteration", increment_iteration_node)
 workflow.add_node("analysis_coordinator", analysis_coordinator_node)
 workflow.add_node("review_agent", review_agent_node)
+workflow.add_node("user_review", user_review_node)
 workflow.add_node("finalizer", create_final_result)
 
 # 设置入口点：因为解析已在外部完成，直接进入分析迭代
 workflow.set_entry_point("increment_iteration")
 
-# 编排流程：increment → analysis → review_agent → 条件路由
+# 编排线性流程
 workflow.add_edge("increment_iteration", "analysis_coordinator")
 workflow.add_edge("analysis_coordinator", "review_agent")
+workflow.add_edge("review_agent", "user_review")
 
-# review_agent 后的条件跳转
-def should_continue_after_review(state: DocState) -> str:
+# 处理用户审核后的条件跳转
+def should_continue(state: DocState) -> str:
     if state.get("is_cancelled"):
         return "max_reached"
 
@@ -164,26 +168,25 @@ def should_continue_after_review(state: DocState) -> str:
         print("无分析数据，流程终止。")
         return "max_reached"
 
-    if state.get("is_approved"):
-        print("AI审核通过，流程终止。")
+    user_review = state.get("user_review")
+    if user_review and getattr(user_review, "approved", False):
         return "approved"
-
+    
     current_count = state.get("iteration_count", 0)
     max_count = state.get("max_iterations", 3)
     if current_count >= max_count:
         print(f"达到最大迭代次数 ({max_count})，流程终止。")
         return "max_reached"
-
-    print(f"AI审核未通过 (迭代 {current_count}/{max_count})，重新分析...")
+        
     return "needs_revision"
 
 workflow.add_conditional_edges(
-    "review_agent",
-    should_continue_after_review,
+    "user_review",
+    should_continue,
     {
         "approved": "finalizer",
         "needs_revision": "increment_iteration",
-        "max_reached": "finalizer",
+        "max_reached": "finalizer"
     }
 )
 
@@ -195,6 +198,9 @@ app = workflow.compile(checkpointer=checkpointer)
 
 
 def run_test_point_analysis(doc_path: str, max_iterations: int = 3, selected_indices: List[int] = None, parsed_data: Any = None):
+    """
+    运行测试点分析流程（自动执行，不推荐用于生产，因为缺少人工干预）。
+    """
     initial_state = _get_initial_state(doc_path, max_iterations, selected_indices, parsed_data)
     config = {"configurable": {"thread_id": "test_analysis_1"}}
     result = app.invoke(initial_state, config=config)
@@ -202,10 +208,42 @@ def run_test_point_analysis(doc_path: str, max_iterations: int = 3, selected_ind
 
 
 def run_with_user_interrupt(doc_path: str, max_iterations: int = 3, thread_id: str = "default", selected_indices: List[int] = None, parsed_data: Any = None):
+    """
+    运行测试点分析流程，支持在用户审核节点中断。
+    """
     initial_state = _get_initial_state(doc_path, max_iterations, selected_indices, parsed_data)
     config = {"configurable": {"thread_id": thread_id}}
-    result = app.invoke(initial_state, config=config)
+
+    try:
+        # app.invoke 在遇到 interrupt 时会抛出异常或停止执行
+        result = app.invoke(initial_state, config=config)
+    except Exception:
+        print(f"\n流程在用户审核节点暂停。")
+        result = None
+
     return result, config
+
+
+def resume_after_user_review(config: dict, user_input: str):
+    """
+    在用户提供反馈后恢复流程执行。
+    
+    Args:
+        config: 包含 thread_id 的配置字典。
+        user_input: 用户的审核意见（'y'/'n' 或具体修改建议）。
+        
+    Returns:
+        Any: 流程恢复后的执行结果。
+    """
+    from langgraph.types import Command
+
+    try:
+        result = app.invoke(Command(resume=user_input), config=config)
+        return result
+    except Exception as e:
+        print(f"恢复流程失败: {e}")
+        return None
+
 
 if __name__ == "__main__":
     print("=" * 80)

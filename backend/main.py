@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from graph.test_analysis_workflow import app as langgraph_app
-from graph.test_analysis_workflow import run_with_user_interrupt
+from graph.test_analysis_workflow import run_with_user_interrupt, resume_after_user_review
 from node.node_list import WordDocumentParser
 from struct_output.output_list import DocSectionWithMetadata
 
@@ -71,17 +71,29 @@ def run_analysis_in_thread(session_id: str, doc_path: str, selected_indices: Lis
         )
 
         sessions[session_id]["config"] = config
-        sessions[session_id]["status"] = "completed"
-        sessions[session_id]["progress"] = "分析完成"
-        sessions[session_id]["result"] = _serialize_result(result)
-        sessions[session_id]["message"] = "分析完成"
 
-        aggregated = result.get("aggregated_analysis") if result else None
-        if aggregated:
-            sessions[session_id]["aggregated_analysis"] = _to_dict(aggregated)
-        approval = result.get("approval_feedback") if result else None
-        if approval:
-            sessions[session_id]["approval_feedback"] = _serialize_approval(approval)
+        if result:
+            sessions[session_id]["status"] = "completed"
+            sessions[session_id]["progress"] = "分析完成"
+            sessions[session_id]["result"] = _serialize_result(result)
+            sessions[session_id]["message"] = "分析完成"
+
+            aggregated = result.get("aggregated_analysis")
+            if aggregated:
+                sessions[session_id]["aggregated_analysis"] = _to_dict(aggregated)
+        else:
+            sessions[session_id]["status"] = "awaiting_review"
+            sessions[session_id]["progress"] = "等待用户审核"
+            sessions[session_id]["message"] = "测试点分析已完成，请审核并输入意见"
+
+            state = langgraph_app.get_state(config)
+            if state:
+                aggregated = state.values.get("aggregated_analysis")
+                if aggregated:
+                    sessions[session_id]["aggregated_analysis"] = _to_dict(aggregated)
+                sessions[session_id]["approval_feedback"] = _serialize_approval(
+                    state.values.get("approval_feedback")
+                )
 
     except Exception as e:
         sessions[session_id]["status"] = "error"
@@ -297,10 +309,41 @@ def get_analysis_result(session_id: str):
 
 @app.post("/api/submit-review")
 def submit_review(input_data: UserReviewInput):
-    raise HTTPException(
-        status_code=410,
-        detail="人工审核功能已暂时关闭。分析完成后自动由 AI 审核并输出结果。"
-    )
+    session_id = input_data.session_id
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    session = sessions[session_id]
+    if session["status"] != "awaiting_review":
+        raise HTTPException(status_code=400, detail=f"当前状态不允许审核: {session['status']}")
+
+    config = session.get("config")
+    if not config:
+        raise HTTPException(status_code=500, detail="未找到流程状态")
+
+    try:
+        result = resume_after_user_review(config, input_data.user_input)
+
+        session["status"] = "completed"
+        session["progress"] = "分析完成"
+        session["message"] = "审核完成，已生成最终结果"
+
+        if result:
+            session["result"] = _serialize_result(result)
+            aggregated = result.get("aggregated_analysis")
+            if aggregated:
+                session["aggregated_analysis"] = _to_dict(aggregated)
+
+        return {
+            "session_id": session_id,
+            "status": "completed",
+            "result": session.get("result"),
+            "aggregated_analysis": session.get("aggregated_analysis"),
+        }
+    except Exception as e:
+        session["status"] = "error"
+        session["message"] = f"恢复流程失败: {str(e)}"
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/stop-analysis/{session_id}")
@@ -309,7 +352,7 @@ def stop_analysis(session_id: str):
         raise HTTPException(status_code=404, detail="会话不存在")
     
     session = sessions[session_id]
-    if session["status"] not in ("starting", "parsing"):
+    if session["status"] not in ("starting", "parsing", "awaiting_review"):
         return {"status": session["status"], "message": "当前流程不在运行中"}
 
     config = session.get("config")
