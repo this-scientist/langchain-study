@@ -1,42 +1,28 @@
-from typing import TypedDict, List, Optional, Union
-from struct_output.output_list import (
-    StructuredDoc, ParsedDocWithMetadata, 
-    TestPointAnalysis, ApprovalFeedback, TestAnalysisWithApproval,
-    CategorizedTestAnalysis, CategorizedTestPoints, UserReviewStatus,
-    AggregatedTestAnalysis,
-)
-
+from typing import TypedDict, List, Optional, Union, Dict, Any
 
 class DocState(TypedDict):
-    file_path: str  # 文档的完整文件路径
-    raw_text_chunks: List[str]  # 文档原始文本分块列表
-    parsed_data: Optional[Union[StructuredDoc, ParsedDocWithMetadata]]  # 解析后的结构化数据或带元数据的解析文档
-    index_status: str  # 文档索引状态标识
-    selected_section_indices: List[int]  # 用户选中的章节索引列表
-
-    test_point_analysis: Optional[TestPointAnalysis]  # 测试点分析结果
-    approval_feedback: Optional[ApprovalFeedback]  # 审批反馈信息
-    test_analysis_result: Optional[TestAnalysisWithApproval]  # 带审批结论的测试分析结果
-    iteration_count: int  # 当前迭代次数
-    max_iterations: int  # 最大允许迭代次数
-    is_approved: bool  # 是否已获批准
-
-    categorized_analysis: Optional[CategorizedTestAnalysis]  # 分类后的测试分析结果
-    table_test_points: Optional[CategorizedTestPoints]  # 表级测试点分类结果
-    func_desc_test_points: Optional[CategorizedTestPoints]  # 功能描述测试点分类结果
-    business_rule_test_points: Optional[CategorizedTestPoints]  # 业务规则测试点分类结果
-    exception_test_points: Optional[CategorizedTestPoints]  # 异常测试点分类结果
-    process_test_points: Optional[CategorizedTestPoints]  # 流程测试点分类结果
-
-    user_review: Optional[UserReviewStatus]  # 用户评审状态
-    user_interrupted: bool  # 用户是否中断流程
-    resume_from_node: str  # 恢复流程时对应的节点标识
-
-    aggregated_analysis: Optional[AggregatedTestAnalysis]  # 汇总后的测试分析结果
-    table_aggregated: Optional[AggregatedTestAnalysis]  # 表级汇总测试分析结果
-    func_desc_aggregated: Optional[AggregatedTestAnalysis]  # 功能描述汇总测试分析结果
-    business_rule_aggregated: Optional[AggregatedTestAnalysis]  # 业务规则汇总测试分析结果
-    exception_aggregated: Optional[AggregatedTestAnalysis]  # 异常汇总测试分析结果
-    process_aggregated: Optional[AggregatedTestAnalysis]
+    # 基础信息
+    task_id: str                   # 数据库中的 analysis_tasks.id
+    doc_id: str                    # 数据库中的 documents.id
+    file_path: str                 # 文档路径
     
-    is_cancelled: bool  # 是否已手动取消/停止分析
+    # 当前处理的需求片段信息
+    current_part_id: Optional[str]  # 当前正在处理的 section_function_parts.id
+    current_part_content: Optional[str] # 当前处理的文本内容
+    current_part_type: Optional[str]    # 当前处理的类型 (table, func_desc, etc.)
+    
+    # 选中的待处理需求列表 (function_part_id 列表)
+    pending_part_ids: List[str]
+    
+    # 运行状态
+    status: str                    # starting, analyzing, completed, error
+    progress: str                  # 进度描述
+    message: str                   # 错误或提示信息
+    
+    # 格式审查结果汇总 (临时存储在 state 中，随后入库)
+    format_issues: List[Dict[str, Any]]
+    
+    # 临时存储分析节点生成的 ID，供审查节点使用
+    last_saved_tp_ids: Optional[List[str]]
+    
+    is_cancelled: bool             # 是否已停止分析
