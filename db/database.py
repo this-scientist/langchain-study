@@ -275,4 +275,42 @@ class DatabaseManager:
             cur.close()
             conn.close()
 
+    def get_test_points_by_part_id(self, task_id: str, part_id: str) -> List[Dict[str, Any]]:
+        """获取指定任务和片段下的所有测试点（简化版，仅含 ID 和描述）"""
+        conn = self.get_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute("""
+                SELECT test_point_id, description 
+                FROM test_points 
+                WHERE task_id = %s AND function_part_id = %s
+                ORDER BY created_at ASC
+            """, (task_id, part_id))
+            return cur.fetchall()
+        finally:
+            cur.close()
+            conn.close()
+
+    def delete_test_points_by_part_id(self, task_id: str, part_id: str):
+        """删除指定任务和片段下的所有旧测试点（用于重新生成前清理）"""
+        conn = self.get_connection()
+        cur = conn.cursor()
+        try:
+            # 1. 先删除关联的格式审查结果
+            cur.execute("""
+                DELETE FROM format_review_results 
+                WHERE test_point_id IN (
+                    SELECT id FROM test_points WHERE task_id = %s AND function_part_id = %s
+                )
+            """, (task_id, part_id))
+            # 2. 再删除测试点
+            cur.execute("DELETE FROM test_points WHERE task_id = %s AND function_part_id = %s", (task_id, part_id))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cur.close()
+            conn.close()
+
 db_manager = DatabaseManager()

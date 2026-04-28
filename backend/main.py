@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field
 
 from graph.test_analysis_workflow import app as langgraph_app, run_task_analysis
 from node.node_list import WordDocumentParser
-from db.database import db_manager
+from prompt.test_analysis import REFLECTION_ANALYSIS_PROMPT
+from node.test_analysis_nodes import _get_llm, _invoke_structured
+from struct_output.test_analysis_schema import SinglePartAnalysisResult
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -243,3 +245,63 @@ def stop_analysis(task_id: str):
 
 
 # 移除旧的 review 接口，因为新流程不需要
+
+
+class RegenerateInput(BaseModel):
+    task_id: str
+    part_id: str
+    user_feedback: str = Field(..., description="用户的批注/反馈意见")
+
+
+@app.post("/api/regenerate-analysis")
+async def regenerate_analysis(input_data: RegenerateInput):
+    """
+    针对特定片段的反思性重新生成。
+    输入：用户反馈、原始测试点概要、原文。
+    """
+    task_id = input_data.task_id
+    part_id = input_data.part_id
+    feedback = input_data.user_feedback
+
+    # 1. 获取原文内容
+    part_data = db_manager.get_function_part(part_id)
+    if not part_data:
+        raise HTTPException(status_code=404, detail="片段不存在")
+    content = part_data["content"]
+
+    # 2. 获取该片段已有的测试点（仅获取 ID 和描述）
+    old_points = db_manager.get_test_points_by_part_id(task_id, part_id)
+    points_summary = "\n".join([f"- {p['test_point_id']}: {p['description']}" for p in old_points]) if old_points else "无原始测试点"
+
+    # 3. 调用反思重新生成提示词
+    from langchain.prompts import PromptTemplate
+    prompt_tpl = PromptTemplate.from_template(REFLECTION_ANALYSIS_PROMPT)
+    prompt_text = prompt_tpl.format(
+        content=content,
+        user_feedback=feedback,
+        original_points=points_summary
+    )
+
+    try:
+        # 4. 调用 LLM
+        llm = _get_llm(0.3) # 重新生成建议适中温度
+        result = _invoke_structured(llm, prompt_text, SinglePartAnalysisResult)
+
+        # 5. 清理旧数据并保存新数据
+        db_manager.delete_test_points_by_part_id(task_id, part_id)
+        
+        saved_tp_ids = []
+        for tp in result.test_points:
+            tp_id = db_manager.save_test_point(task_id, part_id, tp)
+            saved_tp_ids.append(tp_id)
+
+        return {
+            "status": "success",
+            "task_id": task_id,
+            "part_id": part_id,
+            "new_test_point_ids": saved_tp_ids
+        }
+    except Exception as e:
+        print(f"重新生成失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"重新生成失败: {str(e)}")
