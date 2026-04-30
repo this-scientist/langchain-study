@@ -187,15 +187,11 @@ def prepare_data_node(state: DocState) -> Dict:
                 }
             )
 
-    conn = db_manager._get_conn() if hasattr(db_manager, "_get_conn") else db_manager.get_connection()
-    try:
-        for section_id in sections_data:
-            row = conn.execute("SELECT content FROM document_sections WHERE id = ?", (section_id,)).fetchone()
-            if row and row[0]:
-                sections_data[section_id]["content"] = row[0]
-    finally:
-        if hasattr(db_manager, "_get_conn"):
-            conn.close()
+    repo = db_manager.documents_repo
+    for section_id in sections_data:
+        body = repo.get_section_content(section_id)
+        if body:
+            sections_data[section_id]["content"] = body
 
     table_ids = db_manager.get_section_table_ids_by_part_ids(part_ids)
     table_groups = _group_table_ids_by_section(table_ids)
@@ -352,31 +348,15 @@ def single_analysis_node(state: DocState) -> Dict:
                 section_id = sample_table.get("section_id", "")
                 print(f"[DEBUG] 获取到 section_id={section_id}")
                 if section_id:
-                    conn = db_manager._get_conn() if hasattr(db_manager, "_get_conn") else db_manager.get_connection()
-                    try:
-                        existing_part = conn.execute(
-                            "SELECT id FROM section_function_parts WHERE section_id = ? LIMIT 1",
-                            (section_id,),
-                        ).fetchone()
-                        print(f"[DEBUG] 查询现有 part: {existing_part}")
-                        if existing_part:
-                            save_part_id = existing_part[0]
-                            print(f"[DEBUG] 使用现有 part_id: {save_part_id}")
-                        else:
-                            import uuid
-
-                            new_part_id = str(uuid.uuid4())
-                            print(f"[DEBUG] 创建新 part: {new_part_id}, section_id={section_id}")
-                            conn.execute(
-                                "INSERT INTO section_function_parts (id, section_id, part_index, section_type, content, created_at) VALUES (?,?,?,?,?,?)",
-                                (new_part_id, section_id, 0, "表格", content[:500], db_manager._now()),
-                            )
-                            conn.commit()
-                            save_part_id = new_part_id
-                            print(f"[DEBUG] 新 part 创建成功: {save_part_id}")
-                    finally:
-                        if hasattr(db_manager, "_get_conn"):
-                            conn.close()
+                    repo = db_manager.documents_repo
+                    existing_id = repo.get_first_function_part_id_for_section(section_id)
+                    print(f"[DEBUG] 查询现有 part: {existing_id}")
+                    if existing_id:
+                        save_part_id = existing_id
+                        print(f"[DEBUG] 使用现有 part_id: {save_part_id}")
+                    else:
+                        save_part_id = repo.insert_table_function_part(section_id, content)
+                        print(f"[DEBUG] 新 part 创建成功: {save_part_id}")
 
         print(f"[DEBUG] 最终 save_part_id={save_part_id}, 测试点数量={len(result.test_points)}")
 
@@ -404,30 +384,13 @@ def rule_analysis_node(state: DocState) -> Dict:
         prompt_text = RULE_ANALYSIS_PROMPT.format(rule_content=rule_content)
         result = invoke_structured(prompt_text, SinglePartAnalysisResult)
 
-        conn = db_manager._get_conn() if hasattr(db_manager, "_get_conn") else db_manager.get_connection()
-        doc_row = conn.execute("SELECT document_id FROM analysis_tasks WHERE id = ?", (task_id,)).fetchone()
+        part_row = db_manager.get_first_rule_part_for_task(task_id)
         first_part_id = None
         transaction_name = ""
-        if doc_row:
-            doc_id = doc_row[0]
-            part_row = conn.execute(
-                """
-                SELECT sfp.id, ds.meta_level_2
-                FROM section_function_parts sfp
-                JOIN document_sections ds ON ds.id = sfp.section_id
-                WHERE ds.document_id = ?
-                  AND sfp.section_type NOT IN ('表格', '操作权限')
-                  AND LENGTH(sfp.content) >= 10
-                ORDER BY ds.section_index, sfp.part_index
-                LIMIT 1
-            """,
-                (doc_id,),
-            ).fetchone()
-            if part_row:
-                first_part_id = part_row[0]
-                transaction_name = part_row[1] or ""
-        if hasattr(db_manager, "_get_conn"):
-            conn.close()
+        if part_row:
+            raw_pid = part_row.get("part_id")
+            first_part_id = str(raw_pid) if raw_pid is not None else None
+            transaction_name = (part_row.get("meta_level_2") or "") if first_part_id else ""
 
         level_3 = ""
         test_case_path = f"{transaction_name}\\{level_3}" if transaction_name else ""

@@ -182,6 +182,30 @@ class DatabaseManager:
             cur.close()
             conn.close()
 
+    def get_first_rule_part_for_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """First non-table / non-permission function part for the task's document (for rule_analysis_node)."""
+        conn = self.get_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """
+                SELECT sfp.id AS part_id, ds.meta_level_2
+                FROM analysis_tasks at
+                JOIN document_sections ds ON ds.document_id = at.document_id
+                JOIN section_function_parts sfp ON sfp.section_id = ds.id
+                WHERE at.id = %s
+                  AND sfp.section_type NOT IN ('表格', '操作权限')
+                  AND LENGTH(sfp.content) >= 10
+                ORDER BY ds.section_index, sfp.part_index
+                LIMIT 1
+                """,
+                (task_id,),
+            )
+            return cur.fetchone()
+        finally:
+            cur.close()
+            conn.close()
+
     def get_analysis_results(self, task_id: str) -> List[Dict[str, Any]]:
         """获取任务的所有测试点结果"""
         conn = self.get_connection()
@@ -194,27 +218,47 @@ class DatabaseManager:
             cur.close()
             conn.close()
 
-    def save_test_point(self, task_id: str, function_part_id: str, test_point: Dict[str, Any]) -> str:
-        """保存单个测试点"""
+    def save_test_point(
+        self,
+        task_id: str,
+        function_part_id: str,
+        test_point: Dict[str, Any],
+        transaction_name: Optional[str] = None,
+        test_case_path: Optional[str] = None,
+    ) -> str:
+        """保存单个测试点（可选交易名、用例目录，与 schema 中 case_nature 等对齐）。"""
         conn = self.get_connection()
         cur = conn.cursor()
         try:
             tp_id = str(uuid.uuid4())
-            
-            # 处理 Pydantic 对象或字典
-            tp_bid = getattr(test_point, 'test_point_id', '') if hasattr(test_point, 'test_point_id') else test_point.get('test_point_id', '')
-            tp_desc = getattr(test_point, 'description', '') if hasattr(test_point, 'description') else test_point.get('description', '')
-            tp_prio = getattr(test_point, 'priority', '中') if hasattr(test_point, 'priority') else test_point.get('priority', '中')
-            tp_type = getattr(test_point, 'test_type', '功能测试') if hasattr(test_point, 'test_type') else test_point.get('test_type', '功能测试')
-            tp_steps = getattr(test_point, 'steps', []) if hasattr(test_point, 'steps') else test_point.get('steps', [])
-            tp_exp = getattr(test_point, 'expected_results', []) if hasattr(test_point, 'expected_results') else test_point.get('expected_results', [])
+
+            tp_bid = getattr(test_point, "test_point_id", "") if hasattr(test_point, "test_point_id") else test_point.get("test_point_id", "")
+            tp_desc = getattr(test_point, "description", "") if hasattr(test_point, "description") else test_point.get("description", "")
+            tp_prio = getattr(test_point, "priority", "中") if hasattr(test_point, "priority") else test_point.get("priority", "中")
+            tp_type = getattr(test_point, "test_type", "规则验证") if hasattr(test_point, "test_type") else test_point.get("test_type", "规则验证")
+            tp_case = getattr(test_point, "case_nature", "正") if hasattr(test_point, "case_nature") else test_point.get("case_nature", "正")
+            tp_steps = getattr(test_point, "steps", []) if hasattr(test_point, "steps") else test_point.get("steps", [])
+            tp_exp = getattr(test_point, "expected_results", []) if hasattr(test_point, "expected_results") else test_point.get("expected_results", [])
 
             cur.execute(
-                """INSERT INTO test_points 
-                   (id, task_id, function_part_id, test_point_id, description, priority, test_type, steps, expected_results)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                (tp_id, task_id, function_part_id, tp_bid, tp_desc, tp_prio, tp_type, 
-                 json.dumps(tp_steps), json.dumps(tp_exp))
+                """INSERT INTO test_points
+                   (id, task_id, function_part_id, test_point_id, description, priority, test_type,
+                    case_nature, transaction_name, test_case_path, steps, expected_results)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    tp_id,
+                    task_id,
+                    function_part_id,
+                    tp_bid,
+                    tp_desc,
+                    tp_prio,
+                    tp_type,
+                    tp_case,
+                    transaction_name,
+                    test_case_path,
+                    json.dumps(tp_steps),
+                    json.dumps(tp_exp),
+                ),
             )
             conn.commit()
             return tp_id

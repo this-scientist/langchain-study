@@ -1,4 +1,5 @@
 """PostgreSQL document / section queries; one connection per call (psycopg2 %s only)."""
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from psycopg2.extras import RealDictCursor
@@ -84,6 +85,64 @@ class DocumentRepository:
             if row is None:
                 return None
             return row[0]
+        finally:
+            cur.close()
+            conn.close()
+
+    def get_first_function_part_id_for_section(self, section_id: str) -> Optional[str]:
+        """Return first function part id in a section (by part_index), or None."""
+        conn = self._get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT id FROM section_function_parts
+                WHERE section_id = %s
+                ORDER BY part_index ASC
+                LIMIT 1
+                """,
+                (section_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return str(row[0])
+        finally:
+            cur.close()
+            conn.close()
+
+    def insert_table_function_part(
+        self, section_id: str, content: str, max_len: int = 500
+    ) -> str:
+        """Insert a synthetic「表格」fragment for a section; returns new part UUID."""
+        new_id = str(uuid.uuid4())
+        snippet = (content or "")[:max_len]
+        conn = self._get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO section_function_parts
+                    (id, section_id, part_index, section_type, content, tables_json)
+                VALUES (
+                    %s,
+                    %s,
+                    (SELECT COALESCE(MAX(part_index), -1) + 1
+                     FROM section_function_parts WHERE section_id = %s),
+                    '表格',
+                    %s,
+                    '[]'::jsonb
+                )
+                RETURNING id
+                """,
+                (new_id, section_id, section_id, snippet),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return str(row[0]) if row else new_id
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             cur.close()
             conn.close()
