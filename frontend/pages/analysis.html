@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文档分析 - 智能测试点分析系统</title>
+    <link rel="stylesheet" href="/static/frontend/css/style.css">
+    <style>
+        .analysis-container {
+            display: grid;
+            grid-template-columns: 280px 1fr 440px;
+            gap: 16px;
+            height: calc(100vh - 80px);
+        }
+
+        .panel {
+            background: #fff;
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-header {
+            padding: 12px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a1a2e;
+            border-bottom: 1px solid #e0e0e0;
+            background: #f8f9fa;
+            flex-shrink: 0;
+        }
+
+        .panel-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .upload-zone {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 24px;
+            text-align: center;
+            margin: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .toc-item {
+            padding: 7px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            transition: all 0.15s;
+        }
+
+        .toc-item:hover { background: #f0f4ff; }
+        .toc-item.active { background: #e8f0fe; }
+
+        .toc-item input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            accent-color: #4a6cf7;
+        }
+
+        .section-content { padding: 16px 20px; }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1a1a2e;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #4a6cf7;
+        }
+
+        .func-section {
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            padding: 10px;
+        }
+
+        .test-point-filter {
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            border-bottom: 1px solid #eee;
+            flex-shrink: 0;
+            background: #fff;
+        }
+
+        .filter-btn {
+            padding: 4px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fff;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .filter-btn.active { background: #4a6cf7; color: #fff; border-color: #4a6cf7; }
+
+        .test-point-toolbar {
+            padding: 8px 10px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #eee;
+            flex-shrink: 0;
+            background: #fafbff;
+        }
+
+        .toolbar-btn {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid #c5cae9;
+            background: #fff;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .toolbar-btn.primary { background: #4a6cf7; color: #fff; border-color: #4a6cf7; }
+        .toolbar-btn.danger { border-color: #e57373; color: #c62828; }
+        .toolbar-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+        .test-point-list { padding: 8px; }
+
+        .test-point-item {
+            background: #fff;
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            padding: 10px 12px;
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .test-point-item input[type="checkbox"] {
+            margin-top: 4px;
+            accent-color: #4a6cf7;
+        }
+
+        .tp-body { flex: 1; min-width: 0; }
+
+        .tp-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .tp-id { font-size: 11px; color: #666; font-family: monospace; word-break: break-all; }
+
+        .tp-priority {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .tp-priority.high { background: #ffebee; color: #c62828; }
+        .tp-priority.medium { background: #fff3e0; color: #e65100; }
+        .tp-priority.low { background: #f5f5f5; color: #757575; }
+
+        .tp-desc { font-size: 13px; line-height: 1.45; color: #333; }
+
+        .tp-meta { font-size: 11px; color: #888; margin-top: 6px; }
+
+        .no-selection { text-align: center; padding: 40px 16px; color: #999; }
+
+        .back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            background: none;
+            border: 1px solid #555;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #fff;
+        }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.45);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+
+        .modal-overlay.active { display: flex; }
+
+        .modal-box {
+            background: #fff;
+            border-radius: 12px;
+            max-width: 480px;
+            width: 100%;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+        }
+
+        .modal-box h3 { margin: 0 0 12px; font-size: 16px; }
+
+        .modal-box textarea {
+            width: 100%;
+            min-height: 100px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 13px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+
+        .modal-actions { margin-top: 14px; display: flex; justify-content: flex-end; gap: 10px; }
+    </style>
+</head>
+<body>
+    <div class="app-container" style="max-width: 100%; padding: 0;">
+        <header style="background: #1a1a2e; color: #fff; padding: 12px 20px;">
+            <button class="back-btn" type="button" onclick="window.location.href='/static/frontend/index.html'">
+                ← 返回任务列表
+            </button>
+            <span style="margin-left: 20px;">文档分析</span>
+        </header>
+
+        <div class="analysis-container" style="padding: 16px; max-width: 1680px; margin: 0 auto;">
+            <div class="left-panel panel">
+                <div class="panel-header">
+                    <span>文档目录</span>
+                    <span id="sectionCount">0 个章节</span>
+                </div>
+                <div class="panel-body" id="tocList"></div>
+            </div>
+
+            <div class="middle-panel panel">
+                <div class="panel-header" id="contentInfo">选择章节查看内容</div>
+                <div class="panel-body" id="contentArea">
+                    <div class="no-selection">请从左侧选择章节查看内容</div>
+                </div>
+            </div>
+
+            <div class="right-panel panel">
+                <div class="panel-header">
+                    <span>测试点</span>
+                    <span id="testPointCount">0 个</span>
+                </div>
+                <div class="test-point-toolbar" id="tpToolbar" style="display:none;">
+                    <button type="button" class="toolbar-btn" onclick="toggleSelectAll()">全选/取消</button>
+                    <button type="button" class="toolbar-btn primary" id="btnExport" onclick="doExport()">导出 Excel</button>
+                    <button type="button" class="toolbar-btn primary" id="btnRegen" onclick="openRegenModal()">重新生成</button>
+                    <button type="button" class="toolbar-btn danger" id="btnDel" onclick="deleteSelected()">删除选中</button>
+                </div>
+                <div class="test-point-filter" id="tpFilter" style="display:none;">
+                    <span style="font-size:12px;color:#666;">筛选：</span>
+                    <button type="button" class="filter-btn active" data-filter="all" onclick="setFilter('all', this)">全部</button>
+                    <button type="button" class="filter-btn" data-filter="表格" onclick="setFilter('表格', this)">表格</button>
+                    <button type="button" class="filter-btn" data-filter="操作权限" onclick="setFilter('操作权限', this)">权限</button>
+                    <button type="button" class="filter-btn" data-filter="规则" onclick="setFilter('规则', this)">规则</button>
+                </div>
+                <div class="panel-body" id="testPointArea">
+                    <div class="no-selection">加载中…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="regenModal">
+        <div class="modal-box">
+            <h3>重新生成选中测试点</h3>
+            <p style="font-size:13px;color:#666;margin:0 0 8px;">将调用大模型按你的说明改进用例；完成后列表自动刷新。</p>
+            <label style="font-size:12px;color:#444;">优化说明</label>
+            <textarea id="regenInstruction" placeholder="例如：步骤再具体一些；补充边界与异常场景；预期结果与步骤一一对应…"></textarea>
+            <div class="modal-actions">
+                <button type="button" class="toolbar-btn" onclick="closeRegenModal()">取消</button>
+                <button type="button" class="toolbar-btn primary" id="regenSubmitBtn" onclick="submitRegenerate()">开始重生成</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/frontend/js/api.js"></script>
+    <script src="/static/frontend/js/utils.js"></script>
+    <script>
+        const taskId = new URLSearchParams(window.location.search).get('taskId');
+        let docId = null;
+        let tocData = [];
+        let sectionsContent = [];
+        let selectedSections = new Set();
+        let flatTestPoints = [];
+        let selectedTpIds = new Set();
+        let currentFilter = 'all';
+        let pollTimer = null;
+        let regenPollTimer = null;
+
+        async function init() {
+            if (!taskId) {
+                showToast('缺少任务ID', 'error');
+                return;
+            }
+            await loadTaskAndDocument();
+            await loadTestPointList();
+            startTaskPolling();
+        }
+
+        async function loadTaskAndDocument() {
+            try {
+                const task = await apiClient.getTaskDetail(taskId);
+                docId = task.document_id != null ? String(task.document_id) : null;
+                if (!docId) {
+                    showToast('任务未关联文档', 'error');
+                    return;
+                }
+                const preview = await apiClient.getDocumentPreview(docId);
+                sectionsContent = preview.sections_content || [];
+                tocData = sectionsContent.map((sc, idx) => ({
+                    index: idx,
+                    title: sc.title || `章节 ${idx + 1}`,
+                    level_3: sc.title || `章节 ${idx + 1}`,
+                }));
+                document.getElementById('sectionCount').textContent = tocData.length + ' 个章节';
+                selectedSections = new Set(tocData.map((_, i) => i));
+                renderToc();
+                if (tocData.length) showSectionContent(0);
+            } catch (e) {
+                console.error(e);
+                showToast('加载文档失败: ' + e.message, 'error');
+            }
+        }
+
+        async function loadTestPointList() {
+            const area = document.getElementById('testPointArea');
+            try {
+                const res = await apiClient.listTestPoints(taskId, 500, 0);
+                flatTestPoints = res.test_points || [];
+            } catch (e) {
+                console.warn('listTestPoints 失败，尝试聚合接口', e);
+                flatTestPoints = [];
+                try {
+                    const result = await apiClient.getTaskResults(taskId);
+                    const agg = result.aggregated_analysis;
+                    if (agg && agg.fragments) {
+                        agg.fragments.forEach((frag) => {
+                            (frag.test_points || []).forEach((tp) => {
+                                flatTestPoints.push({
+                                    id: tp.test_point_db_id || tp.id,
+                                    test_point_id: tp.test_point_id,
+                                    description: tp.description,
+                                    priority: tp.priority,
+                                    test_type: tp.test_type,
+                                    source_type: tp.source_type,
+                                });
+                            });
+                        });
+                    }
+                } catch (e2) {
+                    area.innerHTML = '<div class="no-selection">加载失败：' + escapeHtml(e2.message) + '</div>';
+                    return;
+                }
+            }
+            renderTestPoints();
+        }
+
+        function renderToc() {
+            const container = document.getElementById('tocList');
+            container.innerHTML = tocData.map((item, index) => `
+                <div class="toc-item ${selectedSections.has(index) ? 'active' : ''}"
+                     onclick="toggleSection(${index}, this)">
+                    <input type="checkbox"
+                           ${selectedSections.has(index) ? 'checked' : ''}
+                           onclick="event.stopPropagation(); toggleSection(${index}, this.parentElement)">
+                    <span>${escapeHtml(item.level_3 || item.title)}</span>
+                </div>
+            `).join('');
+        }
+
+        function toggleSection(index, element) {
+            if (selectedSections.has(index)) {
+                selectedSections.delete(index);
+                element.classList.remove('active');
+                element.querySelector('input').checked = false;
+            } else {
+                selectedSections.add(index);
+                element.classList.add('active');
+                element.querySelector('input').checked = true;
+            }
+            showSectionContent(index);
+        }
+
+        function showSectionContent(index) {
+            if (!sectionsContent[index]) return;
+            const sec = sectionsContent[index];
+            document.getElementById('contentInfo').textContent = sec.title;
+            let html = `<div class="section-content"><div class="section-title">${escapeHtml(sec.title)}</div>`;
+            if (sec.function_sections && sec.function_sections.length) {
+                sec.function_sections.forEach((fs) => {
+                    html += `<div class="func-section"><strong>${escapeHtml(fs.section_type)}</strong><p>${escapeHtml(fs.content)}</p></div>`;
+                });
+            }
+            if (sec.tables && sec.tables.length) {
+                html += '<h4 style="margin-top:12px;">表格数据</h4>';
+                sec.tables.forEach((table) => {
+                    html += '<table style="width:100%;border-collapse:collapse;margin-top:8px;"><thead><tr>';
+                    (table.headers || []).forEach((h) => {
+                        html += `<th style="border:1px solid #ddd;padding:6px;background:#f5f5f5;">${escapeHtml(h)}</th>`;
+                    });
+                    html += '</tr></thead><tbody>';
+                    (table.rows || []).forEach((row) => {
+                        html += '<tr>';
+                        row.forEach((cell) => {
+                            html += `<td style="border:1px solid #ddd;padding:6px;">${escapeHtml(cell)}</td>`;
+                        });
+                        html += '</tr>';
+                    });
+                    html += '</tbody></table>';
+                });
+            }
+            html += '</div>';
+            document.getElementById('contentArea').innerHTML = html;
+        }
+
+        function setFilter(filterType, btnElement) {
+            currentFilter = filterType;
+            document.querySelectorAll('#tpFilter .filter-btn').forEach((btn) => btn.classList.remove('active'));
+            btnElement.classList.add('active');
+            renderTestPoints();
+        }
+
+        function filteredPoints() {
+            return flatTestPoints.filter((tp) => {
+                const st = tp.source_type || '';
+                if (currentFilter === 'all') return true;
+                if (currentFilter === '表格') return st === '表格';
+                if (currentFilter === '操作权限') return st.includes('操作权限');
+                if (currentFilter === '规则') return st && st !== '表格' && !st.includes('操作权限');
+                return true;
+            });
+        }
+
+        function renderTestPoints() {
+            const area = document.getElementById('testPointArea');
+            const countEl = document.getElementById('testPointCount');
+            const filterEl = document.getElementById('tpFilter');
+            const toolbar = document.getElementById('tpToolbar');
+
+            const list = filteredPoints();
+            countEl.textContent = list.length + ' 个';
+
+            if (!flatTestPoints.length) {
+                area.innerHTML = '<div class="no-selection">暂无测试点（若任务仍在分析，请稍候刷新）</div>';
+                filterEl.style.display = 'none';
+                toolbar.style.display = 'none';
+                return;
+            }
+
+            filterEl.style.display = 'flex';
+            toolbar.style.display = 'flex';
+
+            if (!list.length) {
+                area.innerHTML = `<div class="no-selection">暂无「${escapeHtml(currentFilter)}」相关测试点</div>`;
+                return;
+            }
+
+            let html = '<div class="test-point-list">';
+            list.forEach((tp) => {
+                const dbId = String(tp.id != null ? tp.id : tp.test_point_db_id || '');
+                const bizId = escapeHtml(tp.test_point_id || '');
+                const pr = tp.priority || '中';
+                const priorityClass = pr === '高' ? 'high' : pr === '低' ? 'low' : 'medium';
+                const checked = selectedTpIds.has(dbId) ? 'checked' : '';
+                html += `
+                    <div class="test-point-item">
+                        <input type="checkbox" data-tp-id="${escapeHtml(dbId)}" ${checked}
+                               onchange="onTpCheck('${escapeHtml(dbId)}', this.checked)">
+                        <div class="tp-body">
+                            <div class="tp-header">
+                                <span class="tp-id">${bizId}</span>
+                                <span class="tp-priority ${priorityClass}">${escapeHtml(pr)}</span>
+                            </div>
+                            <div class="tp-desc">${escapeHtml(tp.description || '')}</div>
+                            <div class="tp-meta">${escapeHtml(tp.test_type || '')} · ${escapeHtml(tp.source_type || '')}</div>
+                        </div>
+                    </div>`;
+            });
+            html += '</div>';
+            area.innerHTML = html;
+        }
+
+        function onTpCheck(id, checked) {
+            if (checked) selectedTpIds.add(id);
+            else selectedTpIds.delete(id);
+        }
+
+        function toggleSelectAll() {
+            const list = filteredPoints().map((tp) => String(tp.id != null ? tp.id : tp.test_point_db_id || ''));
+            const allOn = list.length && list.every((id) => selectedTpIds.has(id));
+            if (allOn) list.forEach((id) => selectedTpIds.delete(id));
+            else list.forEach((id) => selectedTpIds.add(id));
+            renderTestPoints();
+        }
+
+        function doExport() {
+            window.open(apiClient.exportTestPointsUrl(taskId, false), '_blank');
+        }
+
+        function openRegenModal() {
+            const ids = Array.from(selectedTpIds);
+            if (!ids.length) {
+                showToast('请先勾选要重生成的测试点', 'error');
+                return;
+            }
+            document.getElementById('regenInstruction').value = '';
+            document.getElementById('regenModal').classList.add('active');
+        }
+
+        function closeRegenModal() {
+            document.getElementById('regenModal').classList.remove('active');
+        }
+
+        async function submitRegenerate() {
+            const ids = Array.from(selectedTpIds);
+            if (!ids.length) {
+                showToast('未选择测试点', 'error');
+                return;
+            }
+            const instruction = document.getElementById('regenInstruction').value.trim();
+            const btn = document.getElementById('regenSubmitBtn');
+            btn.disabled = true;
+            try {
+                const { job_id: jobId } = await apiClient.regenerateTestPoints(taskId, ids, instruction);
+                closeRegenModal();
+                showToast('重生成任务已提交', 'success');
+                pollRegenJob(jobId);
+            } catch (e) {
+                console.error(e);
+                showToast(e.message || '重生成失败', 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function pollRegenJob(jobId) {
+            if (regenPollTimer) clearInterval(regenPollTimer);
+            regenPollTimer = setInterval(async () => {
+                try {
+                    const job = await apiClient.getRegenerationJob(jobId);
+                    const st = job.status;
+                    if (st === 'completed' || st === 'failed') {
+                        clearInterval(regenPollTimer);
+                        regenPollTimer = null;
+                        selectedTpIds.clear();
+                        await loadTestPointList();
+                        if (st === 'completed') showToast('重生成完成', 'success');
+                        else showToast('重生成失败: ' + (job.error_message || ''), 'error');
+                    }
+                } catch (e) {
+                    console.error(e);
+                }
+            }, 1600);
+        }
+
+        async function deleteSelected() {
+            const ids = Array.from(selectedTpIds);
+            if (!ids.length) {
+                showToast('请先勾选要删除的测试点', 'error');
+                return;
+            }
+            if (!confirm(`确定软删除选中的 ${ids.length} 条测试点？`)) return;
+            for (const id of ids) {
+                try {
+                    await apiClient.patchTestPointSoftDelete(id, taskId);
+                } catch (e) {
+                    console.error(e);
+                    showToast(`删除失败 ${id}: ${e.message}`, 'error');
+                }
+            }
+            selectedTpIds.clear();
+            showToast('已删除选中项', 'info');
+            await loadTestPointList();
+        }
+
+        function startTaskPolling() {
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = setInterval(async () => {
+                try {
+                    const status = await apiClient.getTaskStatus(taskId);
+                    const s = status.status;
+                    if (s === 'completed' || s === 'failed' || s === 'cancelled' || s === 'error') {
+                        clearInterval(pollTimer);
+                        pollTimer = null;
+                        await loadTestPointList();
+                        if (s === 'completed') showToast('分析完成', 'success');
+                    }
+                } catch (e) {
+                    console.error(e);
+                }
+            }, 3000);
+        }
+
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
