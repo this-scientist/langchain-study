@@ -5,13 +5,18 @@ from psycopg2.extras import RealDictCursor, execute_values
 from typing import Dict, List, Any, Optional
 import uuid
 
+from db.repositories.documents import DocumentRepository
+
+
 class DatabaseManager:
     def __init__(self):
         self.host = os.getenv("DB_HOST", "8.138.101.86")
         self.port = os.getenv("DB_PORT", "5432")
         self.dbname = os.getenv("DB_NAME", "langchain_db")
         self.user = os.getenv("DB_USER", "postgres")
-        self.password = os.getenv("DB_PASSWORD", "!yyf19981122")
+        self.password = os.getenv("DB_PASSWORD", "")
+
+        self._documents_repo: Optional[DocumentRepository] = None
 
     def get_connection(self):
         return psycopg2.connect(
@@ -19,8 +24,14 @@ class DatabaseManager:
             port=self.port,
             dbname=self.dbname,
             user=self.user,
-            password=self.password
+            password=self.password,
         )
+
+    @property
+    def documents_repo(self) -> DocumentRepository:
+        if self._documents_repo is None:
+            self._documents_repo = DocumentRepository(self.get_connection)
+        return self._documents_repo
 
     def save_parsed_document(self, file_name: str, file_path: str, parsed_data: Any):
         """保存解析后的文档到数据库，返回 (doc_id, part_id_map)"""
@@ -255,20 +266,7 @@ class DatabaseManager:
 
     def get_function_part(self, part_id: str) -> Optional[Dict[str, Any]]:
         """获取需求片段详情"""
-        conn = self.get_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        try:
-            cur.execute("""
-                SELECT sfp.*, ds.title as section_title, d.file_path, d.id as doc_id
-                FROM section_function_parts sfp
-                JOIN document_sections ds ON ds.id = sfp.section_id
-                JOIN documents d ON d.id = ds.document_id
-                WHERE sfp.id = %s
-            """, (part_id,))
-            return cur.fetchone()
-        finally:
-            cur.close()
-            conn.close()
+        return self.documents_repo.get_function_part(part_id)
 
     def get_function_parts_by_ids(self, part_ids: List[str]) -> List[Dict[str, Any]]:
         """批量获取需求片段详情"""
@@ -291,20 +289,7 @@ class DatabaseManager:
             conn.close()
 
     def get_section_table(self, table_id: str) -> Optional[Dict[str, Any]]:
-        conn = self.get_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        try:
-            cur.execute("""
-                SELECT st.*, ds.title as section_title, ds.meta_level_2, ds.meta_level_3, d.file_path, d.id as doc_id
-                FROM section_tables st
-                JOIN document_sections ds ON ds.id = st.section_id
-                JOIN documents d ON d.id = ds.document_id
-                WHERE st.id = %s
-            """, (table_id,))
-            return cur.fetchone()
-        finally:
-            cur.close()
-            conn.close()
+        return self.documents_repo.get_section_table(table_id)
 
     def get_section_table_ids_by_doc(self, doc_id: str) -> List[str]:
         conn = self.get_connection()
@@ -323,25 +308,7 @@ class DatabaseManager:
             conn.close()
 
     def get_section_table_ids_by_part_ids(self, part_ids: List[str]) -> List[str]:
-        if not part_ids:
-            return []
-        conn = self.get_connection()
-        cur = conn.cursor()
-        try:
-            cur.execute("""
-                SELECT DISTINCT st.id
-                FROM section_tables st
-                JOIN document_sections ds ON ds.id = st.section_id
-                WHERE ds.id IN (
-                    SELECT DISTINCT sfp.section_id
-                    FROM section_function_parts sfp
-                    WHERE sfp.id IN %s
-                )
-                ORDER BY ds.section_index, st.table_index
-            """, (tuple(part_ids),))
-            return [r[0] for r in cur.fetchall()]
-        finally:
-            cur.close()
-            conn.close()
+        return self.documents_repo.get_section_table_ids_by_part_ids(part_ids)
+
 
 db_manager = DatabaseManager()
