@@ -6,6 +6,8 @@ from typing import Dict, List, Any, Optional
 import uuid
 
 from db.repositories.documents import DocumentRepository
+from db.repositories.regeneration_jobs import RegenerationJobRepository
+from db.repositories.test_points import TestPointRepository
 
 
 class DatabaseManager:
@@ -17,6 +19,8 @@ class DatabaseManager:
         self.password = os.getenv("DB_PASSWORD", "")
 
         self._documents_repo: Optional[DocumentRepository] = None
+        self._regeneration_jobs_repo: Optional[RegenerationJobRepository] = None
+        self._test_points_repo: Optional[TestPointRepository] = None
 
     def get_connection(self):
         return psycopg2.connect(
@@ -32,6 +36,18 @@ class DatabaseManager:
         if self._documents_repo is None:
             self._documents_repo = DocumentRepository(self.get_connection)
         return self._documents_repo
+
+    @property
+    def regeneration_jobs_repo(self) -> RegenerationJobRepository:
+        if self._regeneration_jobs_repo is None:
+            self._regeneration_jobs_repo = RegenerationJobRepository(self.get_connection)
+        return self._regeneration_jobs_repo
+
+    @property
+    def test_points_repo(self) -> TestPointRepository:
+        if self._test_points_repo is None:
+            self._test_points_repo = TestPointRepository(self.get_connection)
+        return self._test_points_repo
 
     def save_parsed_document(self, file_name: str, file_path: str, parsed_data: Any):
         """保存解析后的文档到数据库，返回 (doc_id, part_id_map)"""
@@ -99,6 +115,117 @@ class DatabaseManager:
         except Exception as e:
             conn.rollback()
             raise e
+        finally:
+            cur.close()
+            conn.close()
+
+    def update_task_for_start_analysis(self, task_id: str, selected_part_ids: List[str]) -> bool:
+        """写入选中片段并开始运行；返回是否更新到至少一行。"""
+        conn = self.get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                UPDATE analysis_tasks
+                SET selected_part_ids = %s::jsonb, status = %s, updated_at = now()
+                WHERE id = %s
+                """,
+                (json.dumps(selected_part_ids), "running", task_id),
+            )
+            n = cur.rowcount
+            conn.commit()
+            return n > 0
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+            conn.close()
+
+    def get_all_tasks(self) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                """
+                SELECT at.*, d.file_name
+                FROM analysis_tasks at
+                LEFT JOIN documents d ON d.id = at.document_id
+                ORDER BY at.created_at DESC
+                """
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            cur.close()
+            conn.close()
+
+    def get_test_point_count_by_task(self, task_id: str) -> int:
+        conn = self.get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM test_points
+                WHERE task_id = %s AND is_deleted = FALSE
+                """,
+                (task_id,),
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            cur.close()
+            conn.close()
+
+    def get_all_test_points(
+        self, task_id: Optional[str] = None, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            wheres = ["1=1"]
+            params: List[Any] = []
+            if not include_deleted:
+                wheres.append("tp.is_deleted = FALSE")
+            if task_id:
+                wheres.append("tp.task_id = %s")
+                params.append(task_id)
+            where_sql = " AND ".join(wheres)
+            cur.execute(
+                f"""
+                SELECT
+                    tp.id AS test_point_db_id,
+                    tp.test_point_id,
+                    tp.description,
+                    tp.priority,
+                    tp.test_type,
+                    tp.case_nature,
+                    tp.transaction_name,
+                    tp.test_case_path,
+                    tp.steps,
+                    tp.expected_results,
+                    COALESCE(sfp.section_type, '') AS source_type,
+                    tp.created_at
+                FROM test_points tp
+                LEFT JOIN section_function_parts sfp ON sfp.id = tp.function_part_id
+                WHERE {where_sql}
+                ORDER BY tp.created_at
+                """,
+                tuple(params),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            cur.close()
+            conn.close()
+
+    def delete_task_cascade(self, task_id: str) -> None:
+        conn = self.get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("DELETE FROM analysis_tasks WHERE id = %s", (task_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             cur.close()
             conn.close()
@@ -207,13 +334,42 @@ class DatabaseManager:
             conn.close()
 
     def get_analysis_results(self, task_id: str) -> List[Dict[str, Any]]:
-        """获取任务的所有测试点结果"""
+        """获取任务的所有测试点结果（仅未软删；含 case_nature 等与前端兼容字段）。"""
         conn = self.get_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         try:
-            # 直接从视图查询，获取关联了原文信息的测试点
-            cur.execute("SELECT * FROM v_task_test_points WHERE task_id = %s ORDER BY created_at ASC", (task_id,))
-            return cur.fetchall()
+            cur.execute(
+                """
+                SELECT
+                    at.id AS task_id,
+                    at.status AS task_status,
+                    d.file_name AS document_name,
+                    COALESCE(sfp.section_type, '') AS source_type,
+                    COALESCE(ds.title, '') AS source_section,
+                    COALESCE(sfp.content, '') AS source_content,
+                    tp.id AS test_point_db_id,
+                    tp.test_point_id,
+                    tp.description,
+                    tp.priority,
+                    tp.test_type,
+                    tp.case_nature,
+                    tp.transaction_name,
+                    tp.test_case_path,
+                    tp.steps,
+                    tp.expected_results,
+                    tp.format_valid,
+                    tp.created_at
+                FROM test_points tp
+                JOIN analysis_tasks at ON at.id = tp.task_id
+                JOIN documents d ON d.id = at.document_id
+                LEFT JOIN section_function_parts sfp ON sfp.id = tp.function_part_id
+                LEFT JOIN document_sections ds ON ds.id = sfp.section_id
+                WHERE tp.task_id = %s AND tp.is_deleted = FALSE
+                ORDER BY tp.created_at ASC
+                """,
+                (task_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
         finally:
             cur.close()
             conn.close()
@@ -225,8 +381,11 @@ class DatabaseManager:
         test_point: Dict[str, Any],
         transaction_name: Optional[str] = None,
         test_case_path: Optional[str] = None,
+        replaces_id: Optional[str] = None,
+        regeneration_job_id: Optional[str] = None,
+        user_feedback_at_regenerate: Optional[str] = None,
     ) -> str:
-        """保存单个测试点（可选交易名、用例目录，与 schema 中 case_nature 等对齐）。"""
+        """保存单个测试点；重生成时可传 replaces_id / regeneration_job_id / user_feedback。"""
         conn = self.get_connection()
         cur = conn.cursor()
         try:
@@ -243,8 +402,9 @@ class DatabaseManager:
             cur.execute(
                 """INSERT INTO test_points
                    (id, task_id, function_part_id, test_point_id, description, priority, test_type,
-                    case_nature, transaction_name, test_case_path, steps, expected_results)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    case_nature, transaction_name, test_case_path, steps, expected_results,
+                    replaces_id, regeneration_job_id, user_feedback_at_regenerate)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     tp_id,
                     task_id,
@@ -258,6 +418,9 @@ class DatabaseManager:
                     test_case_path,
                     json.dumps(tp_steps),
                     json.dumps(tp_exp),
+                    replaces_id,
+                    regeneration_job_id,
+                    user_feedback_at_regenerate,
                 ),
             )
             conn.commit()
@@ -353,6 +516,3 @@ class DatabaseManager:
 
     def get_section_table_ids_by_part_ids(self, part_ids: List[str]) -> List[str]:
         return self.documents_repo.get_section_table_ids_by_part_ids(part_ids)
-
-
-db_manager = DatabaseManager()

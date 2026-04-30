@@ -6,6 +6,66 @@ from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
 
+class _LocalDocumentsRepo:
+    """供节点使用的 SQLite 版片段接口（与 DocumentRepository 对齐）。"""
+
+    def __init__(self, manager: "LocalDatabaseManager"):
+        self._m = manager
+
+    def get_section_content(self, section_id: str) -> Optional[str]:
+        conn = self._m._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT content FROM document_sections WHERE id = ?", (section_id,)
+            ).fetchone()
+            return row[0] if row and row[0] else None
+        finally:
+            conn.close()
+
+    def get_first_function_part_id_for_section(self, section_id: str) -> Optional[str]:
+        conn = self._m._get_conn()
+        try:
+            row = conn.execute(
+                """
+                SELECT id FROM section_function_parts
+                WHERE section_id = ?
+                ORDER BY part_index ASC
+                LIMIT 1
+                """,
+                (section_id,),
+            ).fetchone()
+            return str(row[0]) if row else None
+        finally:
+            conn.close()
+
+    def insert_table_function_part(self, section_id: str, content: str, max_len: int = 500) -> str:
+        new_id = str(uuid.uuid4())
+        snippet = (content or "")[:max_len]
+        now = self._m._now()
+        conn = self._m._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(part_index), -1) + 1 FROM section_function_parts WHERE section_id = ?",
+                (section_id,),
+            ).fetchone()
+            idx = int(row[0]) if row else 0
+            conn.execute(
+                """
+                INSERT INTO section_function_parts
+                (id, section_id, part_index, section_type, content, tables_json, created_at)
+                VALUES (?, ?, ?, '表格', ?, '[]', ?)
+                """,
+                (new_id, section_id, idx, snippet, now),
+            )
+            conn.commit()
+            return new_id
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
 class LocalDatabaseManager:
     def __init__(self, db_path: str = None):
         self.db_path = db_path or os.path.join(
@@ -264,6 +324,59 @@ class LocalDatabaseManager:
         finally:
             conn.close()
 
+    @property
+    def documents_repo(self) -> _LocalDocumentsRepo:
+        if not hasattr(self, "_documents_repo_inst"):
+            self._documents_repo_inst = _LocalDocumentsRepo(self)
+        return self._documents_repo_inst
+
+    def update_task_for_start_analysis(self, task_id: str, selected_part_ids: List[str]) -> bool:
+        conn = self._get_conn()
+        now = self._now()
+        try:
+            cur = conn.execute(
+                "UPDATE analysis_tasks SET selected_part_ids = ?, status = ?, updated_at = ? WHERE id = ?",
+                (
+                    json.dumps(selected_part_ids, ensure_ascii=False),
+                    "running",
+                    now,
+                    task_id,
+                ),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def delete_task_cascade(self, task_id: str) -> None:
+        conn = self._get_conn()
+        try:
+            conn.execute("DELETE FROM analysis_tasks WHERE id = ?", (task_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_first_rule_part_for_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                """
+                SELECT sfp.id AS part_id, ds.meta_level_2
+                FROM analysis_tasks at
+                JOIN document_sections ds ON ds.document_id = at.document_id
+                JOIN section_function_parts sfp ON sfp.section_id = ds.id
+                WHERE at.id = ?
+                  AND sfp.section_type NOT IN ('表格', '操作权限')
+                  AND LENGTH(sfp.content) >= 10
+                ORDER BY ds.section_index, sfp.part_index
+                LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def update_task_status(self, task_id: str, status: str, error_message: str = None):
         conn = self._get_conn()
         now = self._now()
@@ -353,10 +466,21 @@ class LocalDatabaseManager:
         finally:
             conn.close()
 
-    def get_all_test_points(self) -> List[Dict[str, Any]]:
+    def get_all_test_points(
+        self, task_id: Optional[str] = None, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
         conn = self._get_conn()
         try:
-            rows = conn.execute("""
+            wheres = ["1=1"]
+            params: List[Any] = []
+            if not include_deleted:
+                wheres.append("tp.is_deleted = 0")
+            if task_id:
+                wheres.append("tp.task_id = ?")
+                params.append(task_id)
+            where_sql = " AND ".join(wheres)
+            rows = conn.execute(
+                f"""
                 SELECT
                     tp.id AS test_point_db_id,
                     tp.test_point_id,
@@ -373,14 +497,26 @@ class LocalDatabaseManager:
                 FROM test_points tp
                 LEFT JOIN section_function_parts sfp ON sfp.id = tp.function_part_id
                 LEFT JOIN section_tables st ON st.id = tp.function_part_id
-                WHERE tp.is_deleted = FALSE
+                WHERE {where_sql}
                 ORDER BY tp.created_at
-            """).fetchall()
+                """,
+                params,
+            ).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
 
-    def save_test_point(self, task_id: str, function_part_id: str, test_point, transaction_name: str = None, test_case_path: str = None) -> str:
+    def save_test_point(
+        self,
+        task_id: str,
+        function_part_id: str,
+        test_point,
+        transaction_name: str = None,
+        test_case_path: str = None,
+        replaces_id: str = None,
+        regeneration_job_id: str = None,
+        user_feedback_at_regenerate: str = None,
+    ) -> str:
         conn = self._get_conn()
         now = self._now()
         tp_id = str(uuid.uuid4())
