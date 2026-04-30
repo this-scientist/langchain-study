@@ -22,12 +22,13 @@ class DatabaseManager:
             password=self.password
         )
 
-    def save_parsed_document(self, file_name: str, file_path: str, parsed_data: Any) -> str:
-        """保存解析后的文档到数据库"""
+    def save_parsed_document(self, file_name: str, file_path: str, parsed_data: Any):
+        """保存解析后的文档到数据库，返回 (doc_id, part_id_map)"""
         conn = self.get_connection()
         cur = conn.cursor()
         try:
             doc_id = str(uuid.uuid4())
+            part_id_map = []
             # 1. 插入 documents 表
             cur.execute(
                 "INSERT INTO documents (id, file_name, file_path, total_sections, total_tables) VALUES (%s, %s, %s, %s, %s)",
@@ -53,14 +54,18 @@ class DatabaseManager:
                     )
 
                 # 4. 插入 section_function_parts 表
+                part_ids = []
                 for p_idx, part in enumerate(sec.function_sections):
+                    pid = str(uuid.uuid4())
                     cur.execute(
-                        "INSERT INTO section_function_parts (section_id, part_index, section_type, content, tables_json) VALUES (%s, %s, %s, %s, %s)",
-                        (sec_id, p_idx, part.section_type, part.content, json.dumps([])) # tables_json 暂存为空
+                        "INSERT INTO section_function_parts (id, section_id, part_index, section_type, content, tables_json) VALUES (%s, %s, %s, %s, %s, %s)",
+                        (pid, sec_id, p_idx, part.section_type, part.content, json.dumps([]))
                     )
+                    part_ids.append(pid)
+                part_id_map.append(part_ids)
 
             conn.commit()
-            return doc_id
+            return doc_id, part_id_map
         except Exception as e:
             conn.rollback()
             raise e
@@ -68,15 +73,15 @@ class DatabaseManager:
             cur.close()
             conn.close()
 
-    def create_analysis_task(self, document_id: str, selected_sections: List[int]) -> str:
+    def create_analysis_task(self, document_id: str, selected_part_ids: List[str]) -> str:
         """创建分析任务"""
         conn = self.get_connection()
         cur = conn.cursor()
         try:
             task_id = str(uuid.uuid4())
             cur.execute(
-                "INSERT INTO analysis_tasks (id, document_id, selected_section_ids, status) VALUES (%s, %s, %s, %s)",
-                (task_id, document_id, json.dumps(selected_sections), 'running')
+                "INSERT INTO analysis_tasks (id, document_id, selected_part_ids, status) VALUES (%s, %s, %s, %s)",
+                (task_id, document_id, json.dumps(selected_part_ids), 'pending')
             )
             conn.commit()
             return task_id
@@ -108,6 +113,16 @@ class DatabaseManager:
             query = f"UPDATE analysis_tasks SET {', '.join(updates)} WHERE id = %s"
             cur.execute(query, tuple(params))
             conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+
+    def get_test_point(self, tp_id: str) -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute("SELECT * FROM test_points WHERE id = %s", (tp_id,))
+            return cur.fetchone()
         finally:
             cur.close()
             conn.close()
@@ -271,6 +286,60 @@ class DatabaseManager:
                 ORDER BY ds.section_index ASC, sfp.part_index ASC
             """, (tuple(part_ids),))
             return cur.fetchall()
+        finally:
+            cur.close()
+            conn.close()
+
+    def get_section_table(self, table_id: str) -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute("""
+                SELECT st.*, ds.title as section_title, ds.meta_level_2, ds.meta_level_3, d.file_path, d.id as doc_id
+                FROM section_tables st
+                JOIN document_sections ds ON ds.id = st.section_id
+                JOIN documents d ON d.id = ds.document_id
+                WHERE st.id = %s
+            """, (table_id,))
+            return cur.fetchone()
+        finally:
+            cur.close()
+            conn.close()
+
+    def get_section_table_ids_by_doc(self, doc_id: str) -> List[str]:
+        conn = self.get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                SELECT st.id
+                FROM section_tables st
+                JOIN document_sections ds ON ds.id = st.section_id
+                WHERE ds.document_id = %s
+                ORDER BY ds.section_index, st.table_index
+            """, (doc_id,))
+            return [r[0] for r in cur.fetchall()]
+        finally:
+            cur.close()
+            conn.close()
+
+    def get_section_table_ids_by_part_ids(self, part_ids: List[str]) -> List[str]:
+        if not part_ids:
+            return []
+        conn = self.get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                SELECT DISTINCT st.id
+                FROM section_tables st
+                JOIN document_sections ds ON ds.id = st.section_id
+                WHERE ds.id IN (
+                    SELECT DISTINCT sfp.section_id
+                    FROM section_function_parts sfp
+                    WHERE sfp.id IN %s
+                )
+                ORDER BY ds.section_index, st.table_index
+            """, (tuple(part_ids),))
+            return [r[0] for r in cur.fetchall()]
         finally:
             cur.close()
             conn.close()
