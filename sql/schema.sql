@@ -14,6 +14,7 @@ DROP TABLE IF EXISTS coverage_gaps CASCADE;
 DROP TABLE IF EXISTS coverage_review_results CASCADE;
 DROP TABLE IF EXISTS format_review_results CASCADE;
 DROP TABLE IF EXISTS test_points CASCADE;
+DROP TABLE IF EXISTS regeneration_jobs CASCADE;
 DROP TABLE IF EXISTS source_fragments CASCADE;
 DROP TABLE IF EXISTS aggregated_analyses CASCADE;
 DROP TABLE IF EXISTS analysis_tasks CASCADE;
@@ -117,7 +118,7 @@ CREATE TABLE analysis_tasks (
     -- pending → running → format_reviewing → coverage_reviewing → completed
     -- 任一阶段可跳转至 failed
 
-    selected_section_ids  JSONB   NOT NULL DEFAULT '[]',  -- 用户选中分析的章节 ID 列表
+    selected_part_ids       JSONB   NOT NULL DEFAULT '[]',  -- section_function_parts.id 的 UUID 数组
     iteration_count       INT     NOT NULL DEFAULT 0,
     max_iterations        INT     NOT NULL DEFAULT 3,
 
@@ -130,6 +131,23 @@ CREATE TABLE analysis_tasks (
 
 CREATE INDEX idx_task_doc    ON analysis_tasks(document_id);
 CREATE INDEX idx_task_status ON analysis_tasks(status);
+
+
+CREATE TABLE regeneration_jobs (
+    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_id               UUID    NOT NULL REFERENCES analysis_tasks(id) ON DELETE CASCADE,
+    status                TEXT    NOT NULL DEFAULT 'pending',
+    payload               JSONB   NOT NULL,
+    progress              JSONB,
+    error_message         TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at            TIMESTAMPTZ,
+    completed_at          TIMESTAMPTZ
+);
+
+CREATE INDEX idx_regen_task ON regeneration_jobs(task_id, created_at DESC);
+CREATE INDEX idx_regen_status ON regeneration_jobs(status);
 
 
 -- ============================================================================
@@ -147,7 +165,12 @@ CREATE TABLE test_points (
     description              TEXT    NOT NULL,            -- 测试点描述
 
     priority                 TEXT    NOT NULL DEFAULT '中',  -- 高 / 中 / 低
-    test_type                TEXT    NOT NULL DEFAULT '功能测试', -- 功能测试/边界测试/异常测试/权限测试
+    test_type                TEXT    NOT NULL DEFAULT '规则验证', -- 规则验证/场景验证/流程验证/界面验证
+    case_nature              TEXT    NOT NULL DEFAULT '正', -- 用例性质：正/反
+
+    -- 用例分类字段
+    transaction_name         TEXT,                        -- 所属交易（2级标题）
+    test_case_path           TEXT,                        -- 测试用例目录（2级标题\3级标题）
 
     steps                    JSONB   NOT NULL DEFAULT '[]',        -- ["1. 打开页面","2. 点击按钮","3. 观察结果"]
     expected_results         JSONB   NOT NULL DEFAULT '[]',        -- ["1. 页面正常显示","2. 按钮响应","3. 结果正确"]
@@ -155,6 +178,13 @@ CREATE TABLE test_points (
     -- 格式审查字段
     format_valid             BOOLEAN,                              -- NULL=未审查, TRUE=合格, FALSE=不合格
     format_issues            JSONB,                                -- [{field:"steps",issue:"步骤与预期数量不匹配"}]
+
+    -- 软删除字段
+    is_deleted               BOOLEAN NOT NULL DEFAULT FALSE,
+
+    replaces_id                  UUID REFERENCES test_points(id) ON DELETE SET NULL,
+    regeneration_job_id          UUID REFERENCES regeneration_jobs(id) ON DELETE SET NULL,
+    user_feedback_at_regenerate  TEXT,
 
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -275,4 +305,8 @@ CREATE TRIGGER trg_analysis_tasks_updated
 
 CREATE TRIGGER trg_test_points_updated
     BEFORE UPDATE ON test_points
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+CREATE TRIGGER trg_regeneration_jobs_updated
+    BEFORE UPDATE ON regeneration_jobs
     FOR EACH ROW EXECUTE FUNCTION update_timestamp();
